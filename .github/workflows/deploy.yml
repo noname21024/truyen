@@ -36,22 +36,20 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: truyen/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Install dependencies
         run: npm install
-        working-directory: truyen
       - name: Build
         run: |
           npm run build
           cp dist/index.html dist/404.html
-        working-directory: truyen
       - name: Setup Pages
         uses: actions/configure-pages@v4
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           # Upload entire repository
-          path: 'truyen/dist'
+          path: 'dist'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
