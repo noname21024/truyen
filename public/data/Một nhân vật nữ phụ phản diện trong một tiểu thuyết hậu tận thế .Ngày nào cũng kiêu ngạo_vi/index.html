@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Đọc Truyện - Nữ chính trong tận thế</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <div class="progress-bar" id="progressBar"></div>
+
+        <header>
+            <div class="logo" id="homeBtn">APOCALYPSE</div>
+            <div class="nav-buttons">
+                <button id="tocBtn">
+                    <span>Menu</span> ☰
+                </button>
+                <button id="settingsBtn">
+                    <span>Settings</span> ⚙
+                </button>
+            </div>
+        </header>
+
+        <main id="mainContent">
+            <div id="loading" class="loading-view">
+                <div class="spinner"></div>
+                <p>Đang tải dữ liệu...</p>
+            </div>
+        </main>
+
+        <!-- Overlay -->
+        <div class="sidebar-overlay" id="overlay"></div>
+
+        <!-- Sidebar: TOC -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2rem;">
+                <h3 style="font-size:1.5rem;">Mục lục</h3>
+                <button id="closeSidebarBtn" style="background:transparent; border:none; font-size:2rem; padding:0;">&times;</button>
+            </div>
+            <div class="chapter-list" id="chapterList" style="overflow-y:auto; height:calc(100% - 60px);">
+                <!-- Chapters -->
+            </div>
+        </aside>
+
+        <!-- Sidebar: Settings -->
+        <aside class="sidebar" id="settingsModal">
+             <div class="sidebar-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2rem;">
+                <h3 style="font-size:1.5rem;">Cài đặt</h3>
+                <button id="closeSettingsBtn" style="background:transparent; border:none; font-size:2rem; padding:0;">&times;</button>
+            </div>
+            <div class="settings-group">
+                <label>Cỡ chữ (Font Size)</label>
+                <div class="font-controls">
+                    <button id="fontDown">A-</button>
+                    <button id="fontUp">A+</button>
+                </div>
+            </div>
+            <div class="settings-group">
+                <label>Giao diện</label>
+                <p style="color: var(--text-secondary); font-size: 0.9rem;">Chế độ Dark Mode hiện đại mặc định.</p>
+            </div>
+        </aside>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

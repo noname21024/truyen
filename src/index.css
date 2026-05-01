@@ -1,0 +1,45 @@
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Swiper Navigation Customization */
+.swiper-button-next,
+.swiper-button-prev {
+  @apply bg-on-surface border border-on-surface w-8 h-8 rounded-sm text-surface transition-all duration-200 hover:bg-primary hover:text-on-primary hover:border-primary shadow-xl !important;
+  top: auto !important;
+  bottom: 20px !important;
+}
+
+.swiper-button-next:after,
+.swiper-button-prev:after {
+  font-size: 10px !important;
+  font-weight: bold !important;
+}
+
+/* Group buttons at bottom right */
+.swiper-button-next {
+  right: 10px !important;
+}
+
+.swiper-button-prev {
+  right: 50px !important;
+  left: auto !important;
+}
+
+
+
+.swiper-pagination-bullet {
+  @apply rounded-none w-6 h-1 bg-outline-variant/50 transition-all duration-300;
+}
+
+.swiper-pagination-bullet-active {
+  @apply bg-primary w-10;
+}
+
+/* Hide the embedded chapter title in the content */
+.chapter-content-override h1 {
+  display: none !important;
+}
