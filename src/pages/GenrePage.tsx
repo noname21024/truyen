@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import UpdateCard from '@/components/cards/UpdateCard';
-import novelsData from '@/data/novelsIndex.json';
+import novelsDataJson from '@/data/novelsIndex.json';
+const novelsData = novelsDataJson as any[];
 import { getAllNovelViews } from '@/lib/viewCountService';
 
 type SortOption = 'newest' | 'chapters' | 'views' | 'words';
@@ -13,8 +14,8 @@ const GenrePage: React.FC = () => {
   // Extract all unique genres from data
   const allGenres = useMemo(() => {
     const genreSet = new Set<string>();
-    novelsData.forEach(novel => {
-      if (novel.tags) novel.tags.forEach(tag => genreSet.add(tag));
+    novelsData.forEach((novel: any) => {
+      if (novel.tags) novel.tags.forEach((tag: string) => genreSet.add(tag));
     });
     return Array.from(genreSet).sort();
   }, []);

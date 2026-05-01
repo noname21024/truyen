@@ -13,7 +13,7 @@ const ChapterPage: React.FC = () => {
   const [chapterData, setChapterData] = useState<{ title: string; content: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [fontSize, setFontSize] = useState(18);
-  const [lineHeight, setLineHeight] = useState(1.8);
+  const [lineHeight] = useState(1.8);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   useEffect(() => {
@@ -61,7 +61,7 @@ const ChapterPage: React.FC = () => {
       const sessionKey = `viewed_${novelId}`;
       const alreadyViewed = sessionStorage.getItem(sessionKey);
       if (!alreadyViewed) {
-        incrementNovelView(novelId);
+        if (novelId) incrementNovelView(novelId);
         sessionStorage.setItem(sessionKey, '1');
       }
     }

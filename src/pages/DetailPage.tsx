@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import ChapterItem from '@/components/cards/ChapterItem';
 import CommentItem from '@/components/cards/CommentItem';
 import { useParams, Link } from 'react-router-dom';
-import novelsData from '@/data/novelsIndex.json';
+import novelsDataJson from '@/data/novelsIndex.json';
+const novelsData = novelsDataJson as any[];
 import { getNovelViews } from '@/lib/viewCountService';
 
 const DetailPage: React.FC = () => {
@@ -87,7 +88,7 @@ const DetailPage: React.FC = () => {
           </div>
           {/* Genres */}
           <div className="flex flex-wrap gap-2 mb-8">
-            {(novel.tags && novel.tags.length > 0 ? novel.tags : ["Chưa phân loại"]).map((genre) => (
+            {(novel.tags && novel.tags.length > 0 ? novel.tags : ["Chưa phân loại"]).map((genre: string) => (
               <Link 
                 to={`/genres/${encodeURIComponent(genre)}`}
                 key={genre} 
@@ -124,11 +125,11 @@ const DetailPage: React.FC = () => {
           </h2>
           <div className="font-body-reading text-sm text-on-surface-variant space-y-4 leading-relaxed relative">
             {(() => {
-              const paragraphs = (novel.intro || "Đang cập nhật nội dung tóm tắt.").split('\n').filter(p => p.trim() !== '');
+              const paragraphs = (novel.intro || "Đang cập nhật nội dung tóm tắt.").split('\n').filter((p: string) => p.trim() !== '');
               const displayParagraphs = isDescExpanded ? paragraphs : paragraphs.slice(0, 3);
               return (
                 <>
-                  {displayParagraphs.map((paragraph, index) => (
+                  {displayParagraphs.map((paragraph: string, index: number) => (
                     <p key={index}>{paragraph}</p>
                   ))}
                   {!isDescExpanded && paragraphs.length > 3 && (
@@ -138,7 +139,7 @@ const DetailPage: React.FC = () => {
               );
             })()}
           </div>
-          {((novel.intro || "").split('\n').filter(p => p.trim() !== '').length > 3) && (
+          {((novel.intro || "").split('\n').filter((p: string) => p.trim() !== '').length > 3) && (
             <button 
               onClick={() => setIsDescExpanded(!isDescExpanded)}
               className="mt-4 font-bold text-sm text-primary hover:underline flex items-center gap-1"

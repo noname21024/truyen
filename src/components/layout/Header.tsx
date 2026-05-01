@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import novelsData from '@/data/novelsIndex.json';
-import { getAllNovelViews } from '@/lib/viewCountService';
+import novelsDataJson from '@/data/novelsIndex.json';
+const novelsData = novelsDataJson as any[];
 
 const Header: React.FC = () => {
   const location = useLocation();
@@ -14,7 +14,7 @@ const Header: React.FC = () => {
   const allGenres = useMemo(() => {
     const genreSet = new Set<string>();
     novelsData.forEach(novel => {
-      if (novel.tags) novel.tags.forEach(tag => genreSet.add(tag));
+      if (novel.tags) novel.tags.forEach((tag: string) => genreSet.add(tag));
     });
     return Array.from(genreSet).sort();
   }, []);
@@ -26,7 +26,7 @@ const Header: React.FC = () => {
     return novelsData.filter(novel =>
       novel.title.toLowerCase().includes(q) ||
       (novel.author && novel.author.toLowerCase().includes(q)) ||
-      (novel.tags && novel.tags.some(tag => tag.toLowerCase().includes(q)))
+      (novel.tags && novel.tags.some((tag: string) => tag.toLowerCase().includes(q)))
     ).slice(0, 5);
   }, [searchQuery]);
 
