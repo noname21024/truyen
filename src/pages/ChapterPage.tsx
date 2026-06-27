@@ -201,6 +201,10 @@ const ChapterPage: React.FC = () => {
   const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
   const [editingCommentText, setEditingCommentText] = useState('');
 
+  // --- Fixed floating control bar visibility (scroll direction) ---
+  const [isHeaderControlsVisible, setIsHeaderControlsVisible] = useState(false);
+  const lastScrollYRef = useRef(0);
+
   // --- TTS STATE & CONTROLS ---
   const [isTtsPlaying, setIsTtsPlaying] = useState(false);
   const [isTtsLoading, setIsTtsLoading] = useState(false);
@@ -738,22 +742,57 @@ const ChapterPage: React.FC = () => {
     localStorage.setItem('reader-theme', theme);
   }, [theme]);
 
-  // Track scrolling progress
+  // Track scrolling progress + direction for fixed control bar
   useEffect(() => {
+    let accumulatedDelta = 0;
+    const THRESHOLD = 15;
+
     const handleScroll = () => {
+      const currentY = window.scrollY;
       const totalHeight = document.documentElement.scrollHeight - window.innerHeight;
       if (totalHeight > 0) {
-        setScrollPercent(Math.round((window.scrollY / totalHeight) * 100));
+        setScrollPercent(Math.round((currentY / totalHeight) * 100));
       }
+
+      // Fixed bar: show on scroll-up, hide on scroll-down
+      const diff = currentY - lastScrollYRef.current;
+      if (currentY <= 150) {
+        // Near top: always hide the fixed bar (original inline bar is visible)
+        setIsHeaderControlsVisible(false);
+        accumulatedDelta = 0;
+      } else if (diff > 0) {
+        // Scrolling down
+        accumulatedDelta += diff;
+        if (accumulatedDelta > THRESHOLD) {
+          if (!(isFontDropdownOpen || isDropdownOpen)) {
+            setIsHeaderControlsVisible(false);
+          }
+        }
+      } else if (diff < 0) {
+        // Scrolling up
+        accumulatedDelta += diff;
+        if (accumulatedDelta < -THRESHOLD) {
+          setIsHeaderControlsVisible(true);
+          accumulatedDelta = 0;
+        }
+      }
+
+      // Reset accumulator on direction change
+      if ((diff > 0 && accumulatedDelta < 0) || (diff < 0 && accumulatedDelta > 0)) {
+        accumulatedDelta = 0;
+      }
+
+      lastScrollYRef.current = currentY;
     };
-    window.addEventListener('scroll', handleScroll);
+    window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
+  }, [isFontDropdownOpen, isDropdownOpen]);
 
   // Keyboard navigation (Left / Right Arrow)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+      const el = e.target as HTMLElement;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable) return;
 
       if (e.key === 'ArrowRight') {
         if (toc.length === 0 || currentIndex < toc.length) {
@@ -1128,6 +1167,91 @@ const ChapterPage: React.FC = () => {
               </div>
             </div>
 
+          </div>
+        </div>
+
+        {/* 2nd Fixed Floating Control Bar — appears on scroll-up, hides on scroll-down */}
+        <div className={`fixed top-[64px] left-0 right-0 z-40 transition-all duration-300 ${
+          isHeaderControlsVisible
+            ? 'opacity-100 translate-y-0 pointer-events-auto'
+            : 'opacity-0 -translate-y-full pointer-events-none'
+        }`}>
+          <div className="max-w-[860px] mx-auto px-6 pt-2">
+            <div className={`border ${currentTheme.border} ${currentTheme.accentBg} backdrop-blur-md rounded-md p-3.5 flex items-center justify-between gap-4 shadow-lg w-full`}>
+
+              {/* Left: Font controls */}
+              <div className="flex items-center justify-start relative shrink-0 gap-2 font-controls-container">
+                <button
+                  onClick={() => setIsFontDropdownOpen(!isFontDropdownOpen)}
+                  className={`flex items-center space-x-1 px-3 py-2 sm:space-x-1.5 sm:px-4.5 sm:py-2.5 rounded-sm transition-all font-bold text-xs ${currentTheme.buttonBg} border ${currentTheme.border} shadow-sm`}
+                  title="Cài đặt phông chữ và kích thước"
+                >
+                  <ViconicIcon name="format_size" size={14} className="shrink-0" />
+                  <span className="hidden sm:inline">Cỡ chữ & Phông</span>
+                  <ViconicIcon name="arrow_drop_down" size={16} className="shrink-0" />
+                </button>
+                {isFontDropdownOpen && (
+                  <div className={`absolute top-full left-0 mt-2 w-64 p-4 ${theme === 'dark' ? 'bg-[#1C1D21] text-[#C5C8CE] border-[#282B30]' : 'bg-white text-slate-800 border-slate-200'} border shadow-xl rounded-md z-50 flex flex-col gap-4 overscroll-contain`}>
+                    <div>
+                      <div className="flex justify-between items-center mb-1.5">
+                        <span className="text-[10px] font-bold uppercase tracking-wider opacity-85">Kích thước chữ</span>
+                        <span className="font-bold text-xs text-primary">{fontSize}px</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] opacity-60">A-</span>
+                        <input type="range" min={14} max={32} step={2} value={fontSize} onChange={(e) => setFontSize(parseInt(e.target.value, 10))} className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" />
+                        <span className="text-xs font-bold opacity-80">A+</span>
+                      </div>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-bold uppercase tracking-wider mb-2 opacity-85">Kiểu chữ</span>
+                      <div className="grid grid-cols-3 gap-1">
+                        {(['serif', 'sans', 'mono'] as FontType[]).map(type => (
+                          <button key={type} onClick={() => setFontType(type)} className={`text-[10px] font-bold py-1.5 rounded-sm border uppercase transition-all ${fontType === type ? 'border-primary text-primary bg-primary/10' : 'border-slate-200 dark:border-slate-700 opacity-70 hover:opacity-100 hover:border-slate-300'}`}>
+                            {type === 'serif' ? 'Book' : type === 'sans' ? 'Clean' : 'Code'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Center: Chapter nav */}
+              <div className="flex justify-center flex-grow max-w-[150px] sm:max-w-[280px] md:max-w-[340px]">
+                <div className="relative w-full toc-dropdown-container">
+                  <button onClick={() => setIsDropdownOpen(!isDropdownOpen)} className={`flex items-center space-x-1 px-3 py-2 sm:space-x-1.5 sm:px-4.5 sm:py-2.5 rounded-sm transition-all font-bold text-xs ${currentTheme.buttonBg} border ${currentTheme.border} shadow-sm w-full justify-between`}>
+                    <div className="flex items-center space-x-1.5 truncate mr-1.5">
+                      <ViconicIcon name="list" size={14} className="shrink-0" />
+                      <span className="truncate select-none hidden sm:inline">{chapterData?.title || `Chương ${currentIndex}`}</span>
+                      <span className="truncate select-none sm:hidden">Chương {currentIndex}</span>
+                    </div>
+                    <ViconicIcon name="arrow_drop_down" size={16} className="shrink-0" />
+                  </button>
+                  {isDropdownOpen && (
+                    <div className={`absolute top-full left-0 w-full mt-2 max-h-[50vh] overflow-y-auto ${theme === 'dark' ? 'bg-[#1C1D21] text-[#C5C8CE] border-[#282B30]' : 'bg-white text-slate-800 border-slate-200'} border shadow-xl rounded-md z-50 flex flex-col overscroll-contain`}>
+                      {toc.map((title, idx) => (
+                        <button key={idx} onClick={() => { setIsDropdownOpen(false); navigate(`/chapter/${novelId}/${idx + 1}`); }} className={`text-left px-4 py-2.5 hover:bg-primary/5 transition-colors border-b last:border-b-0 text-xs ${theme === 'dark' ? 'border-[#282B30]' : 'border-slate-100'} ${idx + 1 === currentIndex ? 'font-bold text-primary bg-primary/5 border-l-2 border-l-primary' : 'border-l-2 border-l-transparent'}`}>
+                          {title}
+                        </button>
+                      ))}
+                      {toc.length === 0 && (<div className="px-4 py-3 text-xs text-center opacity-70">Không có dữ liệu</div>)}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right: Theme selection */}
+              <div className="flex items-center justify-end shrink-0">
+                <div className="flex items-center space-x-1.5 sm:space-x-2">
+                  {(['light', 'sepia', 'green', 'dark'] as ReadingTheme[]).map(t => {
+                    const colors = { light: 'bg-white border-slate-300', sepia: 'bg-[#F5EEDC] border-[#DCD3B9]', green: 'bg-[#E1EDDB] border-[#C3D5B9]', dark: 'bg-[#1C1D21] border-[#2E3238]' };
+                    return (<button key={t} onClick={() => setTheme(t)} className={`w-6 h-6 sm:w-8 sm:h-8 rounded-full border transition-transform hover:scale-110 active:scale-95 ${colors[t]} ${theme === t ? 'scale-110 ring-2 ring-primary ring-offset-2 dark:ring-offset-[#121316]' : 'opacity-80'}`} title={`Chủ đề ${t}`} />);
+                  })}
+                </div>
+              </div>
+
+            </div>
           </div>
         </div>
 
