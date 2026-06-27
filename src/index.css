@@ -5,6 +5,12 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  body {
+    font-family: 'Be Vietnam Pro', 'Inter', sans-serif;
+  }
+}
+
 /* Swiper Navigation Customization */
 .swiper-button-next,
 .swiper-button-prev {
@@ -42,4 +48,51 @@
 /* Hide the embedded chapter title in the content */
 .chapter-content-override h1 {
   display: none !important;
+}
+
+/* Hero Swiper Navigation & Pagination Customization */
+.hero-swiper .swiper-button-next,
+.hero-swiper .swiper-button-prev {
+  @apply bg-surface border border-outline-variant/30 text-on-surface hover:bg-primary hover:text-on-primary hover:border-primary w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-all duration-300 backdrop-blur-sm !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  bottom: auto !important;
+}
+
+.hero-swiper .swiper-button-next {
+  right: 16px !important;
+}
+
+.hero-swiper .swiper-button-prev {
+  left: 16px !important;
+  right: auto !important;
+}
+
+@media (max-width: 768px) {
+  .hero-swiper .swiper-button-next,
+  .hero-swiper .swiper-button-prev {
+    display: none !important;
+  }
+}
+
+.hero-swiper .swiper-pagination {
+  bottom: 24px !important;
+  text-align: left !important;
+  left: 32px !important;
+  width: auto !important;
+}
+
+@media (max-width: 768px) {
+  .hero-swiper .swiper-pagination {
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    text-align: center !important;
+    bottom: 16px !important;
+  }
+}
+
+@media (min-width: 1300px) {
+  .hero-swiper .swiper-pagination {
+    left: calc((100vw - 1300px) / 2 + 32px) !important;
+  }
 }

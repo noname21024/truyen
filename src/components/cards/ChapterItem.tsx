@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import ViconicIcon from '@/components/ui/ViconicIcon';
 
 interface ChapterItemProps {
   id: string;
@@ -24,7 +25,7 @@ const ChapterItem: React.FC<ChapterItemProps> = ({ id, title, date }) => {
           </span>
         </div>
         <div className="w-6 h-6 rounded-sm bg-surface-variant flex items-center justify-center group-hover:bg-primary transition-colors">
-          <span className="material-symbols-outlined text-sm text-on-surface-variant group-hover:text-on-primary">chevron_right</span>
+          <ViconicIcon name="chevron_right" size={14} className="text-on-surface-variant group-hover:text-on-primary transition-colors shrink-0" />
         </div>
       </Link>
     </div>

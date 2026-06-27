@@ -1,4 +1,5 @@
 import React from 'react';
+import ViconicIcon from '@/components/ui/ViconicIcon';
 
 interface CommentItemProps {
   user: string;
@@ -24,8 +25,8 @@ const CommentItem: React.FC<CommentItemProps> = ({ user, time, text, likes, avat
             <span className="font-label-bold text-on-surface text-xs">{user}</span>
             <span className="text-[9px] text-on-surface-variant font-bold uppercase tracking-widest opacity-80">{time}</span>
           </div>
-          <button className="text-outline hover:text-primary transition-colors">
-            <span className="material-symbols-outlined text-sm">more_horiz</span>
+          <button className="text-outline hover:text-primary transition-colors flex items-center justify-center">
+            <ViconicIcon name="more_horiz" size={14} className="shrink-0" />
           </button>
         </div>
         <p className="font-body-ui text-[12px] text-on-surface mt-1 leading-relaxed">
@@ -33,11 +34,11 @@ const CommentItem: React.FC<CommentItemProps> = ({ user, time, text, likes, avat
         </p>
         <div className="flex items-center gap-4 mt-2">
           <button className="flex items-center gap-1 text-on-surface-variant hover:text-primary transition-colors group">
-            <span className="material-symbols-outlined text-[14px]">favorite</span> 
+            <ViconicIcon name="favorite" size={14} className="shrink-0" /> 
             <span className="font-bold text-[10px]">{likes}</span>
           </button>
           <button className="font-bold text-[10px] text-on-surface-variant hover:text-primary transition-colors flex items-center gap-1">
-            <span className="material-symbols-outlined text-[14px]">reply</span>
+            <ViconicIcon name="reply" size={14} className="shrink-0" />
             Phản hồi
           </button>
         </div>

@@ -6,6 +6,8 @@ import DetailPage from './pages/DetailPage'
 import ChapterPage from './pages/ChapterPage'
 import GenrePage from './pages/GenrePage'
 import SearchPage from './pages/SearchPage'
+import ProfilePage from './pages/ProfilePage'
+import RankingPage from './pages/RankingPage'
 import './App.css'
 
 import ScrollToTop from './components/ScrollToTop'
@@ -22,6 +24,8 @@ function App() {
           <Route path="/chapter/:novelId/:chapterIndex" element={<ChapterPage />} />
           <Route path="/genres/:genreId?" element={<GenrePage />} />
           <Route path="/search" element={<SearchPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/ranking" element={<RankingPage />} />
         </Routes>
       </MainLayout>
     </Router>

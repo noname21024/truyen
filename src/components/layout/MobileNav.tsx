@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
+import ViconicIcon from '@/components/ui/ViconicIcon';
 
 const MobileNav: React.FC = () => {
   const location = useLocation();
@@ -10,22 +11,22 @@ const MobileNav: React.FC = () => {
           className={`flex flex-col items-center ${location.pathname === '/' ? 'text-primary' : 'text-outline'}`} 
           to="/"
         >
-          <span className="material-symbols-outlined text-[24px]">home</span>
+          <ViconicIcon name="home" size={24} />
         </Link>
         <Link 
           className={`flex flex-col items-center ${location.pathname.startsWith('/genres') ? 'text-primary' : 'text-outline'}`} 
           to="/genres"
         >
-          <span className="material-symbols-outlined text-[24px]">category</span>
+          <ViconicIcon name="category" size={24} />
         </Link>
         <Link className="flex flex-col items-center text-outline" to="#">
-          <span className="material-symbols-outlined text-[24px]">trending_up</span>
+          <ViconicIcon name="trending_up" size={24} />
         </Link>
         <Link 
           className={`flex flex-col items-center ${location.pathname === '/new-update' ? 'text-primary' : 'text-outline'}`} 
           to="/new-update"
         >
-          <span className="material-symbols-outlined text-[24px]">update</span>
+          <ViconicIcon name="update" size={24} />
         </Link>
       </div>
     </nav>

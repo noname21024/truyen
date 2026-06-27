@@ -1,0 +1,106 @@
+Created At: 2026-06-27T07:53:39Z
+Completed At: 2026-06-27T07:53:39Z
+File Path: `file:///d:/DESKTOP/web-truyen/truyen/src/pages/ChapterPage.tsx`
+Total Lines: 1347
+Total Bytes: 56871
+Showing lines 1250 to 1347
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1250:       {/* Floating Audio Player - Per-paragraph streaming */}
+1251:       {paragraphs.length > 0 && (
+1252:         <div className={`fixed bottom-0 left-0 right-0 z-50 border-t ${currentTheme.border} ${currentTheme.accentBg} shadow-2xl animate-in slide-in-from-bottom duration-300`}>
+1253:           <div className="flex items-center justify-between gap-2 sm:gap-3 px-3 py-2 sm:px-4 sm:py-2.5 max-w-[760px] mx-auto">
+1254:             {/* Left: Info */}
+1255:             <div className="flex items-center gap-2 min-w-0 flex-1">
+1256:               <div className="p-1.5 bg-primary/10 text-primary rounded-sm flex items-center justify-center shrink-0">
+1257:                 {isTtsLoading ? (
+1258:                   <Loader2 className="w-4 h-4 animate-spin" />
+1259:                 ) : (
+1260:                   <ViconicIcon name="settings_voice" size={16} />
+1261:                 )}
+1262:               </div>
+1263:               <div className="min-w-0">
+1264:                 <p className="text-[10px] sm:text-xs font-bold truncate">
+1265:                   {ttsError ? (
+1266:                     <span className="text-destructive">{ttsError}</span>
+1267:                   ) : isModelLoading ? (
+1268:                     <span className="animate-pulse text-primary">Đang tải mô hình...</span>
+1269:                   ) : isTtsLoading ? (
+1270:                     <span className="animate-pulse text-primary">Đang chuyển đổi...</span>
+1271:                   ) : currentParagraphIndex >= 0 ? (
+1272:                     <span className="truncate">
+1273:                       Đoạn {currentParagraphIndex + 1}/{paragraphs.length}
+1274:                     </span>
+1275:                   ) : (
+1276:                     <span className="opacity-70 truncate hidden sm:inline">Chọn đoạn hoặc nhấn Phát để nghe</span>
+1277:                   )}
+1278:                 </p>
+1279:               </div>
+1280:             </div>
+1281: 
+1282:             {/* Center: Controls */}
+1283:             <div className="flex items-center gap-2 sm:gap-3">
+1284:               {/* Skip Previous Button */}
+1285:               <button
+1286:                 onClick={() => {
+1287:                   localStorage.setItem('tts-autoplay', 'true');
+1288:                   navigate(`/chapter/${novelId}/${currentIndex - 1}`);
+1289:                 }}
+1290:                 disabled={currentIndex <= 1}
+1291:                 className="p-1.5 rounded-full hover:bg-current/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-primary flex items-center justify-center"
+1292:                 title="Chương trước"
+1293:               >
+1294:                 <SkipBack className="w-5 h-5" />
+1295:               </button>
+1296: 
+1297:               {/* Play/Pause Toggle Button */}
+1298:               <button
+1299:                 onClick={isTtsPlaying ? pauseTts : resumeTts}
+1300:                 className="p-2 sm:p-2.5 bg-primary text-on-primary rounded-full hover:bg-primary/95 transition-all shadow-md active:scale-95 flex items-center justify-center"
+1301:                 title={isTtsPlaying ? "Tạm dừng" : "Phát"}
+1302:               >
+1303:                 {isTtsPlaying ? (
+1304:                   <Pause className="w-5 h-5 fill-current" />
+1305:                 ) : (
+1306:                   <Play className="w-5 h-5 fill-current" />
+1307:                 )}
+1308:               </button>
+1309: 
+1310:               {/* Skip Next Button */}
+1311:               <button
+1312:                 onClick={() => {
+1313:                   localStorage.setItem('tts-autoplay', 'true');
+1314:                   navigate(`/chapter/${novelId}/${currentIndex + 1}`);
+1315:                 }}
+1316:                 disabled={toc.length > 0 && currentIndex >= toc.length}
+1317:                 className="p-1.5 rounded-full hover:bg-current/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-primary flex items-center justify-center"
+1318:                 title="Chương sau"
+1319:               >
+1320:                 <SkipForward className="w-5 h-5" />
+1321:               </button>
+1322:             </div>
+1323: 
+1324:             {/* Right: Speed control */}
+1325:             <div className="flex items-center gap-2 max-w-[120px] sm:max-w-[160px] flex-1 justify-end">
+1326:               <span className="text-[10px] sm:text-xs font-bold whitespace-nowrap opacity-80 min-w-[32px] text-right">
+1327:                 {ttsSpeed.toFixed(1)}x
+1328:               </span>
+1329:               <input
+1330:                 type="range"
+1331:                 min="1.0"
+1332:                 max="2.0"
+1333:                 step="0.1"
+1334:                 value={ttsSpeed}
+1335:                 onChange={(e) => setTtsSpeed(parseFloat(e.target.value))}
+1336:                 className="w-16 sm:w-24 h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary shrink-0"
+1337:               />
+1338:             </div>
+1339:           </div>
+1340:         </div>
+1341:       )}
+1342:     </div>
+1343:   );
+1344: };
+1345: 
+1346: export default ChapterPage;
+1347: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

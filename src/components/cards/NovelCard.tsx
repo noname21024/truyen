@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import ViconicIcon from '@/components/ui/ViconicIcon';
 
 interface NovelCardProps {
   id: string;
@@ -15,6 +16,7 @@ const NovelCard: React.FC<NovelCardProps> = ({ id, title, author, status, status
   return (
     <div className="group relative">
       <Link
+        data-novel-slug={id}
         to={`/detail/${id}`}
         className="block bg-surface rounded-sm overflow-hidden border border-outline-variant/50 hover:border-primary transition-colors duration-200"
       >
@@ -33,8 +35,8 @@ const NovelCard: React.FC<NovelCardProps> = ({ id, title, author, status, status
 
           {/* Quick Action Overlay */}
           <div className="absolute bottom-4 left-0 right-0 flex justify-center translate-y-4 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-500 z-20">
-            <div className="bg-white/90 backdrop-blur-sm p-2 rounded-full shadow-lg">
-              <span className="material-symbols-outlined text-primary text-xl">play_arrow</span>
+            <div className="bg-white/90 backdrop-blur-sm p-2 rounded-full shadow-lg flex items-center justify-center">
+              <ViconicIcon name="play_arrow" size="20px" className="text-primary" />
             </div>
           </div>
         </div>
@@ -45,11 +47,11 @@ const NovelCard: React.FC<NovelCardProps> = ({ id, title, author, status, status
           </h3>
           <div className="flex items-center justify-between mt-1">
             <p className="font-label-sm text-[10px] text-on-surface-variant flex items-center gap-1 uppercase tracking-wider truncate flex-grow">
-              <span className="material-symbols-outlined text-[12px] shrink-0">person</span>
+              <ViconicIcon name="person" size={12} className="shrink-0" />
               <span className="truncate">{author}</span>
             </p>
             <div className="flex items-center gap-1 text-on-surface-variant">
-              <span className="material-symbols-outlined text-[12px]">visibility</span>
+              <ViconicIcon name="visibility" size={12} className="shrink-0" />
               <span className="text-[10px] font-bold">{views || 0}</span>
             </div>
           </div>

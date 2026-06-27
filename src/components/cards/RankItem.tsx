@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import ViconicIcon from '@/components/ui/ViconicIcon';
 
 interface RankItemProps {
   id: string;
@@ -39,14 +40,14 @@ const RankItem: React.FC<RankItemProps> = ({ id, rank, title, category, reads, i
               {category}
             </span>
             <span className="font-label-sm text-[10px] text-on-surface-variant flex items-center gap-1">
-              <span className="material-symbols-outlined text-[12px]">visibility</span>
+              <ViconicIcon name="visibility" size={12} className="shrink-0" />
               {reads}
             </span>
           </div>
         </div>
 
         <div className="w-6 h-6 rounded-[5px] bg-surface-variant flex items-center justify-center group-hover:bg-primary group-hover:text-white transition-colors shrink-0">
-          <span className="material-symbols-outlined text-sm">chevron_right</span>
+          <ViconicIcon name="chevron_right" size={14} className="shrink-0" />
         </div>
 
       </Link>
