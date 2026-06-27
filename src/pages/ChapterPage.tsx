@@ -1152,7 +1152,7 @@ const ChapterPage: React.FC = () => {
         </div>
 
         {/* Fixed Control Bar — appears when original bar scrolls out of viewport */}
-        <div className={`fixed top-[64px] left-0 right-0 z-40 transition-all duration-300 border-b ${currentTheme.border} ${currentTheme.accentBg} shadow-lg ${
+        <div className={`fixed top-0 left-0 right-0 z-40 transition-all duration-300 border-b ${currentTheme.border} ${currentTheme.accentBg} shadow-lg ${
           isHeaderControlsVisible
             ? 'opacity-100 translate-y-0 pointer-events-auto'
             : 'opacity-0 -translate-y-full pointer-events-none'
@@ -1521,9 +1521,15 @@ const ChapterPage: React.FC = () => {
                     <div className="flex flex-col gap-2 mt-2">
                       <div
                         contentEditable={true}
-                        dangerouslySetInnerHTML={{ __html: editingCommentText }}
+                        ref={(el) => {
+                          if (el && !el.dataset.initialized) {
+                            el.innerHTML = editingCommentText;
+                            el.dataset.initialized = 'true';
+                          }
+                        }}
                         onInput={(e) => setEditingCommentText(e.currentTarget.innerHTML)}
                         className={`w-full ${currentTheme.bg} border ${currentTheme.border} focus:border-primary focus:ring-0 rounded-sm p-2.5 font-body-ui text-xs min-h-[60px] outline-none shadow-inner`}
+                        dir="ltr"
                       />
                       <div className="flex gap-2 justify-end">
                         <button
@@ -1595,17 +1601,17 @@ const ChapterPage: React.FC = () => {
 
                   {/* Reply Form */}
                   {replyingToId === comment.id && (
-                    <form onSubmit={(e) => handleAddReply(comment.id, e)} className={`mt-3 p-3 rounded-sm border border-dashed ${currentTheme.border} bg-current/5 flex gap-3 animate-in slide-in-from-top-2 duration-200`}>
-                      <img alt="Your avatar" className={`w-8 h-8 rounded-sm shrink-0 object-cover border ${currentTheme.border}`} src={currentUser ? currentUser.avatar : "https://lh3.googleusercontent.com/aida-public/AB6AXuD1epYzUm9PYg5Z4v3zZXDsv3Ph06NlgpommDOBvTTqpLS3sgVhIeXPPp9WnpwOkdoqtjcPa7sGjgQfoBHy1XdCxXIKD7tqus0SdH1HPjLIKxGI69O0lGijT1mmXVujCcTxU8e4qviArMpb35YAx9YX9MqEvEk89DXG1XvQL29j24ny5Zf8gpuufV0HirEieDmpzG4wzbSixeeYFb8Jzm5F7Pj_zz0pQAd7bOyes99b2icDY6xwJomVgVwm7mLtPK9U6SCF3BpQUm0w"} />
+                    <form onSubmit={(e) => handleAddReply(comment.id, e)} className={`mt-3 p-2 sm:p-3 rounded-sm border border-dashed ${currentTheme.border} bg-current/5 flex gap-2 sm:gap-3 animate-in slide-in-from-top-2 duration-200`}>
+                      <img alt="Your avatar" className={`w-6 h-6 sm:w-8 sm:h-8 rounded-sm shrink-0 object-cover border ${currentTheme.border}`} src={currentUser ? currentUser.avatar : "https://lh3.googleusercontent.com/aida-public/AB6AXuD1epYzUm9PYg5Z4v3zZXDsv3Ph06NlgpommDOBvTTqpLS3sgVhIeXPPp9WnpwOkdoqtjcPa7sGjgQfoBHy1XdCxXIKD7tqus0SdH1HPjLIKxGI69O0lGijT1mmXVujCcTxU8e4qviArMpb35YAx9YX9MqEvEk89DXG1XvQL29j24ny5Zf8gpuufV0HirEieDmpzG4wzbSixeeYFb8Jzm5F7Pj_zz0pQAd7bOyes99b2icDY6xwJomVgVwm7mLtPK9U6SCF3BpQUm0w"} />
                       <div className="flex-grow flex flex-col gap-2">
                         <div
                           ref={replyEditorRef}
                           contentEditable={true}
-                          className={`w-full ${currentTheme.bg} border ${currentTheme.border} focus:border-primary focus:ring-0 rounded-sm p-2.5 font-body-ui text-xs min-h-[56px] max-h-[120px] overflow-y-auto outline-none shadow-inner rich-editor`}
+                          className={`w-full ${currentTheme.bg} border ${currentTheme.border} focus:border-primary focus:ring-0 rounded-sm p-2 sm:p-2.5 font-body-ui text-[11px] sm:text-xs min-h-[44px] sm:min-h-[56px] max-h-[120px] overflow-y-auto outline-none shadow-inner rich-editor`}
                           {...({ placeholder: `Phản hồi bình luận của ${comment.user}...` } as any)}
                           onInput={(e) => setReplyText(e.currentTarget.innerHTML)}
                         />
-                        <div className="flex justify-between items-center relative text-[10px]">
+                        <div className="flex justify-between items-center relative text-[9px] sm:text-[10px]">
                           {/* Reply Sticker button */}
                           <div className="relative reply-sticker-container">
                             <button
@@ -1614,7 +1620,7 @@ const ChapterPage: React.FC = () => {
                               className={`flex items-center gap-1 px-2 py-1 border ${currentTheme.border} hover:border-primary/50 hover:bg-current/5 transition-all rounded-sm text-[10px] font-bold`}
                             >
                               <ViconicIcon name="sentiment_satisfied" size={12} className="shrink-0" />
-                              Stickers
+                              <span className="hidden sm:inline">Stickers</span>
                             </button>
                             {/* Reply Sticker Dropdown Popup */}
                             {replyStickerOpenId === comment.id && (
@@ -1666,19 +1672,23 @@ const ChapterPage: React.FC = () => {
                               </div>
                             )}
                           </div>
-                          <div className="flex gap-2">
+                          <div className="flex gap-1.5 sm:gap-2">
                             <button
                               type="button"
                               onClick={() => setReplyingToId(null)}
-                              className={`px-3 py-1 border ${currentTheme.border} ${currentTheme.buttonBg} hover:opacity-90 transition-colors rounded-sm font-bold`}
+                              className={`p-1.5 sm:px-3 sm:py-1 border ${currentTheme.border} ${currentTheme.buttonBg} hover:opacity-90 transition-colors rounded-sm font-bold`}
+                              title="Hủy"
                             >
-                              Hủy
+                              <ViconicIcon name="close" size={12} className="sm:hidden shrink-0" />
+                              <span className="hidden sm:inline">Hủy</span>
                             </button>
                             <button
                               type="submit"
-                              className="px-3 py-1 bg-primary text-on-primary hover:bg-primary/95 transition-colors rounded-sm font-bold shadow-xs shadow-primary/10"
+                              className="p-1.5 sm:px-3 sm:py-1 bg-primary text-on-primary hover:bg-primary/95 transition-colors rounded-sm font-bold shadow-xs shadow-primary/10"
+                              title="Phản hồi"
                             >
-                              Phản hồi
+                              <ViconicIcon name="send" size={12} className="sm:hidden shrink-0" />
+                              <span className="hidden sm:inline">Phản hồi</span>
                             </button>
                           </div>
                         </div>
