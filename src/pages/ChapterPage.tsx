@@ -201,9 +201,9 @@ const ChapterPage: React.FC = () => {
   const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
   const [editingCommentText, setEditingCommentText] = useState('');
 
-  // --- Fixed floating control bar visibility (scroll direction) ---
+  // --- Fixed floating control bar visibility (IntersectionObserver) ---
   const [isHeaderControlsVisible, setIsHeaderControlsVisible] = useState(false);
-  const lastScrollYRef = useRef(0);
+  const originalBarRef = useRef<HTMLDivElement>(null);
 
   // --- TTS STATE & CONTROLS ---
   const [isTtsPlaying, setIsTtsPlaying] = useState(false);
@@ -742,51 +742,32 @@ const ChapterPage: React.FC = () => {
     localStorage.setItem('reader-theme', theme);
   }, [theme]);
 
-  // Track scrolling progress + direction for fixed control bar
+  // Track scrolling progress
   useEffect(() => {
-    let accumulatedDelta = 0;
-    const THRESHOLD = 15;
-
     const handleScroll = () => {
-      const currentY = window.scrollY;
       const totalHeight = document.documentElement.scrollHeight - window.innerHeight;
       if (totalHeight > 0) {
-        setScrollPercent(Math.round((currentY / totalHeight) * 100));
+        setScrollPercent(Math.round((window.scrollY / totalHeight) * 100));
       }
-
-      // Fixed bar: show on scroll-up, hide on scroll-down
-      const diff = currentY - lastScrollYRef.current;
-      if (currentY <= 150) {
-        // Near top: always hide the fixed bar (original inline bar is visible)
-        setIsHeaderControlsVisible(false);
-        accumulatedDelta = 0;
-      } else if (diff > 0) {
-        // Scrolling down
-        accumulatedDelta += diff;
-        if (accumulatedDelta > THRESHOLD) {
-          if (!(isFontDropdownOpen || isDropdownOpen)) {
-            setIsHeaderControlsVisible(false);
-          }
-        }
-      } else if (diff < 0) {
-        // Scrolling up
-        accumulatedDelta += diff;
-        if (accumulatedDelta < -THRESHOLD) {
-          setIsHeaderControlsVisible(true);
-          accumulatedDelta = 0;
-        }
-      }
-
-      // Reset accumulator on direction change
-      if ((diff > 0 && accumulatedDelta < 0) || (diff < 0 && accumulatedDelta > 0)) {
-        accumulatedDelta = 0;
-      }
-
-      lastScrollYRef.current = currentY;
     };
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
-  }, [isFontDropdownOpen, isDropdownOpen]);
+  }, []);
+
+  // Show fixed control bar when original bar scrolls out of viewport
+  useEffect(() => {
+    const el = originalBarRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        // When original bar is NOT intersecting (scrolled out), show fixed bar
+        setIsHeaderControlsVisible(!entry.isIntersecting);
+      },
+      { threshold: 0 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // Keyboard navigation (Left / Right Arrow)
   useEffect(() => {
@@ -1042,7 +1023,7 @@ const ChapterPage: React.FC = () => {
         </header>
 
         {/* Premium Sticky Control Bar */}
-        <div className="mb-8 sticky top-[64px] z-40 transition-all duration-300">
+        <div ref={originalBarRef} className="mb-8">
           <div className={`border ${currentTheme.border} ${currentTheme.accentBg} rounded-md p-3.5 flex items-center justify-between gap-4 shadow-md w-full`}>
 
             {/* Left: Font controls */}
@@ -1170,14 +1151,13 @@ const ChapterPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 2nd Fixed Floating Control Bar — appears on scroll-up, hides on scroll-down */}
-        <div className={`fixed top-[64px] left-0 right-0 z-40 transition-all duration-300 ${
+        {/* Fixed Control Bar — appears when original bar scrolls out of viewport */}
+        <div className={`fixed top-[64px] left-0 right-0 z-40 transition-all duration-300 border-b ${currentTheme.border} ${currentTheme.accentBg} shadow-lg ${
           isHeaderControlsVisible
             ? 'opacity-100 translate-y-0 pointer-events-auto'
             : 'opacity-0 -translate-y-full pointer-events-none'
         }`}>
-          <div className="max-w-[860px] mx-auto px-6 pt-2">
-            <div className={`border ${currentTheme.border} ${currentTheme.accentBg} backdrop-blur-md rounded-md p-3.5 flex items-center justify-between gap-4 shadow-lg w-full`}>
+          <div className="flex items-center justify-between gap-4 px-4 py-2.5 sm:px-6 sm:py-3 max-w-[860px] mx-auto">
 
               {/* Left: Font controls */}
               <div className="flex items-center justify-start relative shrink-0 gap-2 font-controls-container">
@@ -1251,7 +1231,6 @@ const ChapterPage: React.FC = () => {
                 </div>
               </div>
 
-            </div>
           </div>
         </div>
 
