@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import novelsDataJson from '@/data/novelsIndex.json';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { CategoryService, NovelService, CoinService } from '@/lib/api';
+import { CategoryService, NovelService, CoinService, NotificationService, type NotificationData } from '@/lib/api';
 import { showCustomAlert, showCustomConfirm } from '@/lib/dialog';
 import { isUserVIP } from '@/lib/user';
 import {
@@ -28,6 +28,12 @@ const Header: React.FC = () => {
   const [isLoginDialogOpen, setIsLoginDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notifications, setNotifications] = useState<NotificationData[]>([]);
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [notifLoading, setNotifLoading] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const saved = localStorage.getItem('user');
     if (saved) {
@@ -37,6 +43,14 @@ const Header: React.FC = () => {
     window.addEventListener('open-login-dialog', openLogin);
     return () => window.removeEventListener('open-login-dialog', openLogin);
   }, []);
+
+  // Fetch unread notification count when user logs in
+  useEffect(() => {
+    if (!user) { setUnreadCount(0); setNotifications([]); return; }
+    NotificationService.getUnreadCount()
+      .then(count => setUnreadCount(count))
+      .catch(() => {});
+  }, [user?.id]);
 
   // Sync user VIP status and balance with backend on mount
   useEffect(() => {
@@ -154,6 +168,9 @@ const Header: React.FC = () => {
       if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
         setIsUserDropdownOpen(false);
       }
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setIsNotifOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -164,6 +181,7 @@ const Header: React.FC = () => {
     setIsSearchOpen(false);
     setIsMenuOpen(false);
     setIsUserDropdownOpen(false);
+    setIsNotifOpen(false);
     setSearchQuery('');
   }, [location.pathname]);
 
@@ -309,9 +327,175 @@ const Header: React.FC = () => {
             <ViconicIcon name="search" size={24} className="shrink-0" />
           </button>
 
+          {user && (
+            <div className="relative" ref={notifRef}>
+              <button
+                onClick={async () => {
+                  const next = !isNotifOpen;
+                  setIsNotifOpen(next);
+                  if (next && notifications.length === 0) {
+                    setNotifLoading(true);
+                    try {
+                      const data = await NotificationService.getNotifications();
+                      setNotifications(data);
+                    } catch {}
+                    finally { setNotifLoading(false); }
+                  }
+                  if (next) {
+                    setUnreadCount(0);
+                  }
+                }}
+                className="relative p-2 text-on-surface-variant hover:text-primary transition-colors hover:bg-primary-container/20 rounded-sm flex items-center justify-center"
+                aria-label="Thông báo"
+              >
+                <ViconicIcon name="notifications" size={20} className="shrink-0" />
+                {unreadCount > 0 && (
+                  <span className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center leading-none">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {isNotifOpen && (
+                <div className="absolute right-0 mt-2.5 w-96 bg-surface border border-outline-variant/50 rounded-sm shadow-xl z-50 flex flex-col animate-in fade-in slide-in-from-top-2 duration-150" style={{ maxHeight: '520px' }}>
+                  {/* Header sticky */}
+                  <div className="px-4 py-3 border-b border-outline-variant/30 flex justify-between items-center shrink-0 bg-surface">
+                    <span className="font-bold text-sm text-on-surface flex items-center gap-1.5">
+                      <ViconicIcon name="notifications" size={16} className="text-primary shrink-0" />
+                      Thông báo
+                      {notifications.filter(n => !n.is_read).length > 0 && (
+                        <span className="bg-primary text-on-primary text-[10px] font-black px-1.5 py-0.5 rounded-full leading-none">
+                          {notifications.filter(n => !n.is_read).length}
+                        </span>
+                      )}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {notifications.some(n => !n.is_read) && (
+                        <button
+                          onClick={async () => {
+                            await NotificationService.markAllRead().catch(() => {});
+                            setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+                          }}
+                          className="text-[10px] text-primary font-bold hover:underline"
+                        >
+                          Đọc tất cả
+                        </button>
+                      )}
+                      {notifications.length > 0 && (
+                        <button
+                          onClick={async () => {
+                            await NotificationService.clearAll().catch(() => {});
+                            setNotifications([]);
+                          }}
+                          className="text-[10px] text-on-surface-variant hover:text-error font-bold transition-colors"
+                          title="Xóa tất cả"
+                        >
+                          <ViconicIcon name="delete_sweep" size={14} className="shrink-0" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Scrollable list */}
+                  <div className="overflow-y-auto flex-1">
+                    {notifLoading ? (
+                      <div className="py-10 text-center text-xs text-on-surface-variant">Đang tải...</div>
+                    ) : notifications.length === 0 ? (
+                      <div className="py-10 text-center text-xs text-on-surface-variant">
+                        <ViconicIcon name="notifications_none" size={32} className="mx-auto mb-2 text-outline/50" />
+                        Không có thông báo nào
+                      </div>
+                    ) : (
+                      notifications.map(notif => (
+                        <div
+                          key={notif.id}
+                          className={`flex gap-3 px-4 py-3.5 border-b border-outline-variant/20 last:border-b-0 group transition-colors ${!notif.is_read ? 'bg-primary/5 hover:bg-primary/10' : 'hover:bg-surface-variant/30'}`}
+                        >
+                          {/* Avatar */}
+                          <div className="shrink-0 mt-0.5">
+                            {notif.type === 'reply_comment' && notif.data.reply_user_avatar ? (
+                              <img src={notif.data.reply_user_avatar} alt={notif.data.reply_user_name} className="w-9 h-9 rounded-full object-cover border border-outline-variant/50" />
+                            ) : (
+                              <div className={`w-9 h-9 rounded-full flex items-center justify-center ${notif.type === 'reply_comment' ? 'bg-primary/15' : 'bg-yellow-500/15'}`}>
+                                <ViconicIcon name={notif.type === 'reply_comment' ? 'reply' : 'warning'} size={17} className={notif.type === 'reply_comment' ? 'text-primary' : 'text-yellow-500'} />
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Content — clickable */}
+                          <button
+                            className="flex-grow min-w-0 text-left"
+                            onClick={async () => {
+                              if (!notif.is_read) {
+                                NotificationService.markRead(notif.id).catch(() => {});
+                                setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, is_read: true } : n));
+                              }
+                              setIsNotifOpen(false);
+                              const { story_slug, chapter_number, comment_id } = notif.data;
+                              const anchor = comment_id ? `#comment-${comment_id}` : '';
+                              if (notif.type === 'reply_comment' && story_slug && chapter_number) {
+                                window.location.href = `/chapter/${story_slug}/${chapter_number}${anchor}`;
+                              } else if (story_slug) {
+                                window.location.href = `/detail/${story_slug}${anchor}`;
+                              }
+                            }}
+                          >
+                            {notif.type === 'reply_comment' ? (
+                              <>
+                                <p className={`text-[11.5px] leading-snug mb-1 ${!notif.is_read ? 'font-semibold text-on-surface' : 'text-on-surface-variant'}`}>
+                                  <span className="text-primary font-bold">{notif.data.reply_user_name}</span>
+                                  {' đã phản hồi bình luận của bạn'}
+                                  {notif.data.story_title && <span className="text-on-surface font-medium"> trong "{notif.data.story_title}"</span>}
+                                  {notif.data.chapter_number && <span className="text-outline"> · Chương {notif.data.chapter_number}</span>}
+                                </p>
+                                {(notif.data.comment_content || (notif.data.sticker_urls && notif.data.sticker_urls.length > 0)) && (
+                                  <div className="flex items-center gap-1.5 bg-surface-variant/50 rounded px-2 py-1.5 max-w-full">
+                                    {notif.data.sticker_urls && notif.data.sticker_urls.map((url, i) => (
+                                      <img key={i} src={url} alt="sticker" className="h-8 w-8 object-contain shrink-0" />
+                                    ))}
+                                    {notif.data.comment_content && (
+                                      <span className="text-[10.5px] text-on-surface-variant italic truncate">"{notif.data.comment_content}"</span>
+                                    )}
+                                  </div>
+                                )}
+                              </>
+                            ) : (
+                              <p className={`text-[11.5px] leading-snug ${!notif.is_read ? 'font-semibold text-on-surface' : 'text-on-surface-variant'}`}>
+                                {notif.type === 'vip_expiring' ? '⚡ VIP của bạn sắp hết hạn' : '⚠️ VIP của bạn đã hết hạn'}
+                              </p>
+                            )}
+                            <p className="text-[9.5px] text-outline mt-1.5">
+                              {new Date(notif.created_at).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                          </button>
+
+                          {/* Right: unread dot + delete */}
+                          <div className="flex flex-col items-center gap-2 shrink-0 ml-1">
+                            {!notif.is_read && <span className="w-2 h-2 bg-primary rounded-full mt-1 flex-none"></span>}
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                await NotificationService.deleteNotification(notif.id).catch(() => {});
+                                setNotifications(prev => prev.filter(n => n.id !== notif.id));
+                              }}
+                              className="opacity-0 group-hover:opacity-100 transition-opacity text-on-surface-variant/50 hover:text-error p-0.5 rounded"
+                              title="Xóa"
+                            >
+                              <ViconicIcon name="close" size={13} className="shrink-0" />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {user ? (
             <div className="relative" ref={userMenuRef}>
-              <button 
+              <button
                 onClick={() => setIsUserDropdownOpen(!isUserDropdownOpen)}
                 className="flex items-center gap-1 focus:outline-none hover:scale-105 active:scale-95 transition-transform"
                 aria-expanded={isUserDropdownOpen}

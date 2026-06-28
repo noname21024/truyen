@@ -5,7 +5,8 @@ import novelsDataJson from '@/data/novelsIndex.json';
 const novelsData = novelsDataJson as any[];
 import { getNovelViews } from '@/lib/viewCountService';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { NovelService, CoinService, type StoryPriceInfo } from '@/lib/api';
+import { NovelService, CoinService, CommentService, type StoryPriceInfo, type ChapterCommentData } from '@/lib/api';
+import DonateModal from '@/components/DonateModal';
 import { isUserVIP } from '@/lib/user';
 import { STICKER_SETS } from '@/data/stickers';
 
@@ -29,26 +30,6 @@ interface Comment {
   replies?: Reply[];
 }
 
-const getDetailSeedComments = (): Comment[] => [
-  {
-    id: 1,
-    user: "YukiReader",
-    time: "2 giờ trước",
-    text: "Truyện nhẹ nhàng quá, đọc xong chương 1 mà thấy man mác buồn. Hóng chương mới!",
-    likes: 12,
-    avatar: "https://lh3.googleusercontent.com/aida-public/AB6AXuAN-dDBgHYemMZ3kCdUIYxicDtpk4jZimRFi2kCTlcLEt6oZzJuj0biwIJyEHpQRgzQ8nbJjKEU5Bg2aDrk5nqY7MIYz9xriM1CLk6rX0tsa-GRCpGv7zMZ0fqFmNvF5IZ46AQaz8Mt7x4-AoT1CBE6UP7BWVS01XNXCz8Uwm6ba5tvIJ0yg5mgaaRD2U1vWuM_tm4QsLeiC7s7hEBX9KnDmjf9U97hOOfpDjkFQvep4ILDLbuZhfTyLp2n00ak4WA0qG1W77v1Uskf",
-    likedByUser: false
-  },
-  {
-    id: 2,
-    user: "Koko_Nut",
-    time: "Hôm qua",
-    text: "Haru chắc chắn có liên quan đến quá khứ của Aki. Motif quen thuộc nhưng cách viết rất mượt.",
-    likes: 8,
-    avatar: "https://lh3.googleusercontent.com/aida-public/AB6AXuD1epYzUm9PYg5Z4v3zZXDsv3Ph06NlgpommDOBvTTqpLS3sgVhIeXPPp9WnpwOkdoqtjcPa7sGjgQfoBHy1XdCxXIKD7tqus0SdH1HPjLIKxGI69O0lGijT1mmXVujCcTxU8e4qviArMpb35YAx9YX9MqEvEk89DXG1XvQL29j24ny5Zf8gpuufV0HirEieDmpzG4wzbSixeeYFb8Jzm5F7Pj_zz0pQAd7bOyes99b2icDY6xwJomVgVwm7mLtPK9U6SCF3BpQUm0w",
-    likedByUser: false
-  }
-];
 
 const renderCommentContentHtml = (text: string): string => {
   if (!text) return '';
@@ -72,9 +53,14 @@ const DetailPage: React.FC = () => {
   const [isDescExpanded, setIsDescExpanded] = useState(false);
   const [viewCount, setViewCount] = useState(0);
 
+  const [storyDbId, setStoryDbId] = useState<number | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [newCommentText, setNewCommentText] = useState('');
   const [sortBy, setSortBy] = useState<'newest' | 'hot'>('newest');
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [commentTab, setCommentTab] = useState<'story' | 'chapter'>('story');
+  const [chapterComments, setChapterComments] = useState<ChapterCommentData[]>([]);
+  const [chapterCommentsLoaded, setChapterCommentsLoaded] = useState(false);
 
   const [ratingData, setRatingData] = useState({
     count: 1240,
@@ -160,10 +146,12 @@ const DetailPage: React.FC = () => {
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [hotRanking, setHotRanking] = useState<any[]>([]);
   const [replyingToId, setReplyingToId] = useState<number | null>(null);
+  const [highlightedCommentId, setHighlightedCommentId] = useState<number | null>(null);
   const [replyText, setReplyText] = useState('');
   const [isMainStickerOpen, setIsMainStickerOpen] = useState(false);
   const [replyStickerOpenId, setReplyStickerOpenId] = useState<number | null>(null);
   const [activeStickerSetId, setActiveStickerSetId] = useState('trollface');
+  const [showDonateModal, setShowDonateModal] = useState(false);
 
 
   // Load current user session
@@ -356,26 +344,56 @@ const DetailPage: React.FC = () => {
       });
   }, []);
 
-  // Load comments
+  // Load comments from server
   useEffect(() => {
-    if (id) {
-      const storageKey = `comments_novel_${id}`;
-      const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        try {
-          setComments(JSON.parse(saved));
-        } catch (e) {
-          console.error("Failed to parse comments", e);
-          const seeds = getDetailSeedComments();
-          setComments(seeds);
-          localStorage.setItem(storageKey, JSON.stringify(seeds));
-        }
-      } else {
-        const seeds = getDetailSeedComments();
-        setComments(seeds);
-        localStorage.setItem(storageKey, JSON.stringify(seeds));
-      }
-    }
+    if (!id) return;
+    CommentService.getStoryComments(id)
+      .then(data => {
+        const likedKey = `liked_story_comments_${id}`;
+        const liked: number[] = JSON.parse(localStorage.getItem(likedKey) || '[]');
+        const mapped: Comment[] = data.map(c => ({
+          id: c.id,
+          user: c.user_name || 'Ẩn danh',
+          time: new Date(c.created_at).toLocaleDateString('vi-VN'),
+          text: c.content,
+          likes: 0,
+          avatar: c.user_avatar || '',
+          likedByUser: liked.includes(c.id),
+          replies: [],
+        }));
+        // Nest replies under parent comments
+        const roots: Comment[] = [];
+        const map: Record<number, Comment> = {};
+        mapped.forEach(c => { map[c.id] = c; });
+        data.forEach((c, i) => {
+          if (c.parent && map[c.parent]) {
+            map[c.parent].replies = [...(map[c.parent].replies || []), mapped[i]];
+          } else {
+            roots.push(mapped[i]);
+          }
+        });
+        setComments(roots);
+        setTimeout(() => {
+          const hash = window.location.hash;
+          if (hash?.startsWith('#comment-')) {
+            const commentId = parseInt(hash.slice('#comment-'.length));
+            if (!isNaN(commentId)) {
+              setHighlightedCommentId(commentId);
+              setTimeout(() => setHighlightedCommentId(null), 2500);
+              document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }
+        }, 300);
+      })
+      .catch(() => setComments([]));
+  }, [id]);
+
+  // Eagerly load chapter comments so count is shown before tab is clicked
+  useEffect(() => {
+    if (!id) return;
+    CommentService.getChapterCommentsByStory(id)
+      .then(data => { setChapterComments(data); setChapterCommentsLoaded(true); })
+      .catch(() => setChapterCommentsLoaded(true));
   }, [id]);
 
   // Load rating
@@ -398,68 +416,56 @@ const DetailPage: React.FC = () => {
     }
   }, [id]);
 
-  const handleAddComment = (e: React.FormEvent) => {
+  const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCommentText.trim() || !currentUser) return;
-
-    const newComment: Comment = {
-      id: Date.now(),
-      user: currentUser.name,
-      time: "Vừa xong",
-      text: newCommentText.trim(),
-      likes: 0,
-      avatar: currentUser.avatar,
-      likedByUser: false,
-      replies: []
-    };
-
-    const updated = [newComment, ...comments];
-    setComments(updated);
-    setNewCommentText('');
-    if (mainEditorRef.current) {
-      mainEditorRef.current.innerHTML = '';
-    }
-
-    if (id) {
-      localStorage.setItem(`comments_novel_${id}`, JSON.stringify(updated));
+    if (!newCommentText.trim() || !currentUser || !storyDbId || commentSubmitting) return;
+    setCommentSubmitting(true);
+    try {
+      const created = await CommentService.postStoryComment(storyDbId, newCommentText.trim());
+      const newComment: Comment = {
+        id: created.id,
+        user: created.user_name || currentUser.name,
+        time: "Vừa xong",
+        text: created.content,
+        likes: 0,
+        avatar: created.user_avatar || currentUser.avatar,
+        likedByUser: false,
+        replies: [],
+      };
+      setComments(prev => [newComment, ...prev]);
+      setNewCommentText('');
+      if (mainEditorRef.current) mainEditorRef.current.innerHTML = '';
+    } catch {
+      alert("Đăng bình luận thất bại. Vui lòng đăng nhập và thử lại!");
+    } finally {
+      setCommentSubmitting(false);
     }
   };
 
-  const handleAddReply = (commentId: number, e: React.FormEvent) => {
+  const handleAddReply = async (commentId: number, e: React.FormEvent) => {
     e.preventDefault();
-    if (!replyText.trim()) return;
+    if (!replyText.trim() || !storyDbId) return;
     if (!currentUser) {
       alert("Vui lòng đăng nhập để phản hồi cảm nhận!");
       return;
     }
-
-    const newReply: Reply = {
-      id: Date.now(),
-      user: currentUser.name,
-      time: "Vừa xong",
-      text: replyText.trim(),
-      avatar: currentUser.avatar,
-    };
-
-    const updatedComments = comments.map(c => {
-      if (c.id === commentId) {
-        return {
-          ...c,
-          replies: [...(c.replies || []), newReply]
-        };
-      }
-      return c;
-    });
-
-    setComments(updatedComments);
-    setReplyText('');
-    setReplyingToId(null);
-    if (replyEditorRef.current) {
-      replyEditorRef.current.innerHTML = '';
-    }
-
-    if (id) {
-      localStorage.setItem(`comments_novel_${id}`, JSON.stringify(updatedComments));
+    try {
+      const created = await CommentService.postStoryComment(storyDbId, replyText.trim(), commentId);
+      const newReply: Reply = {
+        id: created.id,
+        user: created.user_name || currentUser.name,
+        time: "Vừa xong",
+        text: created.content,
+        avatar: created.user_avatar || currentUser.avatar,
+      };
+      setComments(prev => prev.map(c =>
+        c.id === commentId ? { ...c, replies: [...(c.replies || []), newReply] } : c
+      ));
+      setReplyText('');
+      setReplyingToId(null);
+      if (replyEditorRef.current) replyEditorRef.current.innerHTML = '';
+    } catch {
+      alert("Phản hồi thất bại. Vui lòng đăng nhập và thử lại!");
     }
   };
 
@@ -514,21 +520,16 @@ const DetailPage: React.FC = () => {
       alert("Vui lòng đăng nhập tài khoản để thích bình luận!");
       return;
     }
-    const updated = comments.map(c => {
-      if (c.id === commentId) {
-        const liked = !c.likedByUser;
-        return {
-          ...c,
-          likedByUser: liked,
-          likes: liked ? c.likes + 1 : Math.max(0, c.likes - 1)
-        };
-      }
-      return c;
-    });
-    setComments(updated);
-    if (id) {
-      localStorage.setItem(`comments_novel_${id}`, JSON.stringify(updated));
-    }
+    const likedKey = `liked_story_comments_${id}`;
+    const liked: number[] = JSON.parse(localStorage.getItem(likedKey) || '[]');
+    const isLiked = liked.includes(commentId);
+    const updatedLiked = isLiked ? liked.filter(x => x !== commentId) : [...liked, commentId];
+    localStorage.setItem(likedKey, JSON.stringify(updatedLiked));
+    setComments(prev => prev.map(c =>
+      c.id === commentId
+        ? { ...c, likedByUser: !isLiked, likes: isLiked ? Math.max(0, c.likes - 1) : c.likes + 1 }
+        : c
+    ));
   };
 
   const handleRate = (rating: number) => {
@@ -571,6 +572,7 @@ const DetailPage: React.FC = () => {
         .then(data => {
           setViewCount(data.view_count || 0);
           
+          setStoryDbId(data.id);
           const mapped = {
             id: data.slug,
             slug: data.slug,
@@ -946,7 +948,7 @@ const DetailPage: React.FC = () => {
                 <ViconicIcon name="forward" size={13} className="shrink-0" />
                 <span>Đọc Tiếp {lastReadChapter ? `(C. ${lastReadChapter})` : ''}</span>
               </Link>
-              <button 
+              <button
                 onClick={handleFollowToggle}
                 className={`font-bold text-xs px-5 py-2 rounded-sm transition-all duration-200 flex items-center gap-1.5 border active:scale-95 ${
                   isFollowed
@@ -956,6 +958,13 @@ const DetailPage: React.FC = () => {
               >
                 <ViconicIcon name="favorite" size={13} className="shrink-0" />
                 {isFollowed ? 'Đã Theo Dõi' : 'Theo Dõi'}
+              </button>
+              <button
+                onClick={() => setShowDonateModal(true)}
+                className="font-bold text-xs px-4 py-2 rounded-sm transition-all duration-200 flex items-center gap-1.5 border border-amber-400/60 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 active:scale-95 dark:text-amber-400"
+              >
+                <img src="/icons/donate/throne.png" alt="" className="w-4 h-4 object-contain" />
+                Ủng Hộ
               </button>
             </div>
 
@@ -1294,37 +1303,71 @@ const DetailPage: React.FC = () => {
 
       {/* Thoughts/Comments at the very bottom spanning full width */}
       <section className="md:col-span-12 bg-surface border border-outline-variant/50 p-6 rounded-sm shadow-sm mt-6">
-      <div className="flex items-center justify-between mb-4 border-b border-outline-variant/50 pb-3">
-        <h2 className="font-display-lg text-lg md:text-xl text-on-surface flex items-center gap-2">
-          <ViconicIcon name="forum" size={24} className="text-primary shrink-0" />
-          Cảm nhận ({comments.length})
-        </h2>
-        <div className="flex items-center border border-outline-variant/50 rounded-sm overflow-hidden p-0.5 text-[9px] font-bold">
+      <div className="flex items-center justify-between mb-4 border-b border-outline-variant/50 pb-3 gap-3 flex-wrap">
+        {/* Comment type tabs */}
+        <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={() => setSortBy('newest')}
-            className={`px-2 py-0.5 transition-all rounded-[3px] ${
-              sortBy === 'newest'
-                ? 'bg-primary text-on-primary font-bold'
-                : 'opacity-70 hover:opacity-100 text-on-surface-variant'
+            onClick={() => setCommentTab('story')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-xs font-bold transition-all ${
+              commentTab === 'story'
+                ? 'bg-primary text-on-primary shadow-sm'
+                : 'text-on-surface-variant hover:text-primary hover:bg-primary/5'
             }`}
           >
-            Mới
+            <ViconicIcon name="forum" size={13} className="shrink-0" />
+            Truyện ({comments.reduce((acc, c) => acc + 1 + (c.replies?.length || 0), 0)})
           </button>
           <button
             type="button"
-            onClick={() => setSortBy('hot')}
-            className={`px-2 py-0.5 transition-all rounded-[3px] ${
-              sortBy === 'hot'
-                ? 'bg-primary text-on-primary font-bold'
-                : 'opacity-70 hover:opacity-100 text-on-surface-variant'
+            onClick={() => {
+              setCommentTab('chapter');
+              if (!chapterCommentsLoaded && id) {
+                CommentService.getChapterCommentsByStory(id)
+                  .then(data => { setChapterComments(data); setChapterCommentsLoaded(true); })
+                  .catch(() => setChapterCommentsLoaded(true));
+              }
+            }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-xs font-bold transition-all ${
+              commentTab === 'chapter'
+                ? 'bg-primary text-on-primary shadow-sm'
+                : 'text-on-surface-variant hover:text-primary hover:bg-primary/5'
             }`}
           >
-            Hot
+            <ViconicIcon name="chat_bubble" size={13} className="shrink-0" />
+            Chương ({chapterComments.length})
           </button>
         </div>
+        {/* Sort — only in story tab */}
+        {commentTab === 'story' && (
+          <div className="flex items-center border border-outline-variant/50 rounded-sm overflow-hidden p-0.5 text-[9px] font-bold">
+            <button
+              type="button"
+              onClick={() => setSortBy('newest')}
+              className={`px-2 py-0.5 transition-all rounded-[3px] ${
+                sortBy === 'newest'
+                  ? 'bg-primary text-on-primary font-bold'
+                  : 'opacity-70 hover:opacity-100 text-on-surface-variant'
+              }`}
+            >
+              Mới
+            </button>
+            <button
+              type="button"
+              onClick={() => setSortBy('hot')}
+              className={`px-2 py-0.5 transition-all rounded-[3px] ${
+                sortBy === 'hot'
+                  ? 'bg-primary text-on-primary font-bold'
+                  : 'opacity-70 hover:opacity-100 text-on-surface-variant'
+              }`}
+            >
+              Hot
+            </button>
+          </div>
+        )}
       </div>
       
+      {commentTab === 'story' && (<>
       {!currentUser ? (
         <div className="mb-6 bg-surface-variant/20 border border-dashed border-outline-variant/50 p-4 rounded-sm text-center">
           <p className="text-xs text-on-surface-variant mb-2">Vui lòng đăng nhập để gửi cảm nhận của bạn về bộ truyện này.</p>
@@ -1431,7 +1474,7 @@ const DetailPage: React.FC = () => {
                   </div>
                 )}
               </div>
-              <button type="submit" className="bg-primary text-on-primary font-bold px-6 py-2 rounded-sm hover:bg-primary/90 transition-colors text-xs shadow-md shadow-primary/10">Đăng cảm nhận</button>
+              <button type="submit" disabled={commentSubmitting} className="bg-primary text-on-primary font-bold px-6 py-2 rounded-sm hover:bg-primary/90 transition-colors text-xs shadow-md shadow-primary/10 disabled:opacity-60">{commentSubmitting ? 'Đang đăng...' : 'Đăng cảm nhận'}</button>
             </div>
           </div>
         </form>
@@ -1439,9 +1482,10 @@ const DetailPage: React.FC = () => {
       
       <div className="space-y-3 border-t border-outline-variant/50 pt-4">
         {sortedComments.map((comment) => (
-          <div 
+          <div
             key={comment.id}
-            className="flex gap-3 p-3 rounded-sm bg-surface hover:bg-surface-variant/20 transition-colors border border-outline-variant/50"
+            id={`comment-${comment.id}`}
+            className={`flex gap-3 p-3 rounded-sm bg-surface hover:bg-surface-variant/20 transition-all duration-300 border ${highlightedCommentId === comment.id ? 'border-primary shadow-md shadow-primary/20 ring-1 ring-primary/40' : 'border-outline-variant/50'}`}
           >
             <div className="relative shrink-0">
               {isUserVIP(comment.user) ? (
@@ -1643,7 +1687,83 @@ const DetailPage: React.FC = () => {
           </div>
         )}
       </div>
+      </>)}
+
+      {commentTab === 'chapter' && (
+        <div className="space-y-3 border-t border-outline-variant/50 pt-4">
+          {chapterComments.filter(c => c.parent === null).map(comment => {
+            const replies = chapterComments.filter(r => r.parent === comment.id);
+            return (
+              <div key={comment.id} className="flex gap-3 p-3 rounded-sm bg-surface hover:bg-surface-variant/20 transition-colors border border-outline-variant/50">
+                <img
+                  alt={comment.user_name || 'Ẩn danh'}
+                  className="w-10 h-10 rounded-sm shrink-0 object-cover border border-outline-variant/50"
+                  src={comment.user_avatar || 'https://placehold.co/40x40/e2e8f0/64748b?text=?'}
+                />
+                <div className="flex-grow min-w-0">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <Link to={`/chapter/${id}/${comment.chapter_number}`}>
+                      <span className="px-1.5 py-0.5 bg-primary/10 text-primary text-[9px] font-black rounded uppercase tracking-wide hover:bg-primary/20 transition-colors cursor-pointer">
+                        Chương {comment.chapter_number}
+                      </span>
+                    </Link>
+                    <span className="font-label-bold text-xs text-on-surface truncate">{comment.user_name || 'Ẩn danh'}</span>
+                    <span className="text-[9px] text-on-surface-variant shrink-0">{new Date(comment.created_at).toLocaleDateString('vi-VN')}</span>
+                  </div>
+                  <p
+                    className="font-body-ui text-[12px] text-on-surface leading-relaxed break-words"
+                    dangerouslySetInnerHTML={{ __html: renderCommentContentHtml(comment.content) }}
+                  />
+                  {replies.length > 0 && (
+                    <div className="mt-3 pl-4 border-l-2 border-outline-variant/30 space-y-2.5">
+                      {replies.map(reply => (
+                        <div key={reply.id} className="flex gap-2 bg-surface-variant/20 p-2 rounded-sm border border-outline-variant/20">
+                          <img
+                            alt={reply.user_name || 'Ẩn danh'}
+                            className="w-7 h-7 rounded-sm shrink-0 object-cover border border-outline-variant/50"
+                            src={reply.user_avatar || 'https://placehold.co/28x28/e2e8f0/64748b?text=?'}
+                          />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              <span className="font-label-bold text-[11px] text-on-surface truncate">{reply.user_name || 'Ẩn danh'}</span>
+                              <span className="text-[9px] text-on-surface-variant shrink-0">{new Date(reply.created_at).toLocaleDateString('vi-VN')}</span>
+                            </div>
+                            <p
+                              className="font-body-ui text-[11px] text-on-surface leading-relaxed break-words"
+                              dangerouslySetInnerHTML={{ __html: renderCommentContentHtml(reply.content) }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {chapterComments.length === 0 && chapterCommentsLoaded && (
+            <div className="text-center py-8 border border-dashed border-outline-variant/50 rounded-sm text-xs text-on-surface-variant/70">
+              Chưa có bình luận chương nào. Hãy đọc và chia sẻ cảm nhận trong từng chương!
+            </div>
+          )}
+          {!chapterCommentsLoaded && (
+            <div className="text-center py-8 text-xs text-on-surface-variant/70">Đang tải bình luận chương...</div>
+          )}
+        </div>
+      )}
     </section>
+    {showDonateModal && novel && (
+      <DonateModal
+        storySlug={novel.slug || id || ''}
+        storyTitle={novel.title || ''}
+        coinBalance={balance}
+        onClose={() => setShowDonateModal(false)}
+        onSuccess={(newBalance) => {
+          setBalance(newBalance);
+          window.dispatchEvent(new Event('balance-updated'));
+        }}
+      />
+    )}
     </div>
   );
 };

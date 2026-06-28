@@ -3,7 +3,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import novelsDataJson from '@/data/novelsIndex.json';
 import { incrementNovelView } from '@/lib/viewCountService';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { NovelService, ChapterService, CoinService } from '@/lib/api';
+import { NovelService, ChapterService, CoinService, CommentService } from '@/lib/api';
 import { isUserVIP } from '@/lib/user';
 import { TtsSession, PATH_MAP } from '@realtimex/piper-tts-web';
 import { Play, Pause, SkipForward, SkipBack, Loader2 } from 'lucide-react';
@@ -145,28 +145,6 @@ const renderCommentContentHtml = (text: string): string => {
   });
 };
 
-const getSeedComments = (): Comment[] => {
-  return [
-    {
-      id: 1,
-      user: "YukiReader",
-      time: "2 giờ trước",
-      text: "Truyện cuốn quá, dịch mượt ghê! Hóng chương sau.",
-      likes: 12,
-      avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
-      likedByUser: false
-    },
-    {
-      id: 2,
-      user: "Koko_Nut",
-      time: "Hôm qua",
-      text: "Nữ chính cá tính quá, quyết đoán thế này mới xứng đáng làm đại sự chứ!",
-      likes: 8,
-      avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80",
-      likedByUser: false
-    }
-  ];
-};
 
 const ChapterPage: React.FC = () => {
   const { novelId, chapterIndex } = useParams<{ novelId: string; chapterIndex: string }>();
@@ -200,7 +178,9 @@ const ChapterPage: React.FC = () => {
 
   const [activeCommentMenuId, setActiveCommentMenuId] = useState<number | null>(null);
   const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
+  const [highlightedCommentId, setHighlightedCommentId] = useState<number | null>(null);
   const [editingCommentText, setEditingCommentText] = useState('');
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
 
   // --- VIP chapter lock ---
   const UNLOCK_COST = 100;
@@ -579,27 +559,48 @@ const ChapterPage: React.FC = () => {
     };
   }, [isFontDropdownOpen, isDropdownOpen, isMainStickerOpen, replyStickerOpenId, activeCommentMenuId]);
 
-  // Load and save comments for specific chapter
+  // Load comments from server for this chapter
   useEffect(() => {
-    if (novelId && currentIndex) {
-      const storageKey = `comments_${novelId}_chapter_${currentIndex}`;
-      const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        try {
-          setComments(JSON.parse(saved));
-        } catch (e) {
-          console.error("Failed to parse saved comments", e);
-          const seeds = getSeedComments();
-          setComments(seeds);
-          localStorage.setItem(storageKey, JSON.stringify(seeds));
-        }
-      } else {
-        const seeds = getSeedComments();
-        setComments(seeds);
-        localStorage.setItem(storageKey, JSON.stringify(seeds));
-      }
-    }
-  }, [novelId, currentIndex]);
+    if (!currentChapterId) return;
+    CommentService.getChapterComments(currentChapterId)
+      .then(data => {
+        const likedKey = `liked_chapter_comments_${currentChapterId}`;
+        const liked: number[] = JSON.parse(localStorage.getItem(likedKey) || '[]');
+        const mapped: Comment[] = data.map(c => ({
+          id: c.id,
+          user: c.user_name || 'Ẩn danh',
+          time: new Date(c.created_at).toLocaleDateString('vi-VN'),
+          text: c.content,
+          likes: 0,
+          avatar: c.user_avatar || '',
+          likedByUser: liked.includes(c.id),
+          replies: [],
+        }));
+        const roots: Comment[] = [];
+        const map: Record<number, Comment> = {};
+        mapped.forEach(c => { map[c.id] = c; });
+        data.forEach((c, i) => {
+          if (c.parent && map[c.parent]) {
+            map[c.parent].replies = [...(map[c.parent].replies || []), mapped[i]];
+          } else {
+            roots.push(mapped[i]);
+          }
+        });
+        setComments(roots);
+        setTimeout(() => {
+          const hash = window.location.hash;
+          if (hash?.startsWith('#comment-')) {
+            const commentId = parseInt(hash.slice('#comment-'.length));
+            if (!isNaN(commentId)) {
+              setHighlightedCommentId(commentId);
+              setTimeout(() => setHighlightedCommentId(null), 2500);
+              document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }
+        }, 300);
+      })
+      .catch(() => setComments([]));
+  }, [currentChapterId]);
 
   const insertStickerToMain = (setId: string, filename: string) => {
     const set = STICKER_SETS.find(s => s.id === setId);
@@ -647,70 +648,56 @@ const ChapterPage: React.FC = () => {
     setReplyStickerOpenId(null);
   };
 
-  const handleAddComment = (e: React.FormEvent) => {
+  const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCommentText.trim() || !currentUser) return;
-
-    const newComment: Comment = {
-      id: Date.now(),
-      user: currentUser.name,
-      time: "Vừa xong",
-      text: newCommentText.trim(),
-      likes: 0,
-      avatar: currentUser.avatar,
-      likedByUser: false,
-      replies: []
-    };
-
-    const updated = [newComment, ...comments];
-    setComments(updated);
-    setNewCommentText('');
-    if (mainEditorRef.current) {
-      mainEditorRef.current.innerHTML = '';
-    }
-
-    if (novelId && currentIndex) {
-      const storageKey = `comments_${novelId}_chapter_${currentIndex}`;
-      localStorage.setItem(storageKey, JSON.stringify(updated));
+    if (!newCommentText.trim() || !currentUser || !currentChapterId || commentSubmitting) return;
+    setCommentSubmitting(true);
+    try {
+      const created = await CommentService.postChapterComment(currentChapterId, newCommentText.trim());
+      const newComment: Comment = {
+        id: created.id,
+        user: created.user_name || currentUser.name,
+        time: "Vừa xong",
+        text: created.content,
+        likes: 0,
+        avatar: created.user_avatar || currentUser.avatar,
+        likedByUser: false,
+        replies: [],
+      };
+      setComments(prev => [newComment, ...prev]);
+      setNewCommentText('');
+      if (mainEditorRef.current) mainEditorRef.current.innerHTML = '';
+    } catch {
+      alert("Đăng bình luận thất bại. Vui lòng đăng nhập và thử lại!");
+    } finally {
+      setCommentSubmitting(false);
     }
   };
 
-  const handleAddReply = (commentId: number, e: React.FormEvent) => {
+  const handleAddReply = async (commentId: number, e: React.FormEvent) => {
     e.preventDefault();
-    if (!replyText.trim()) return;
+    if (!replyText.trim() || !currentChapterId) return;
     if (!currentUser) {
       alert("Vui lòng đăng nhập để phản hồi cảm nhận!");
       return;
     }
-
-    const newReply: Reply = {
-      id: Date.now(),
-      user: currentUser.name,
-      time: "Vừa xong",
-      text: replyText.trim(),
-      avatar: currentUser.avatar,
-    };
-
-    const updatedComments = comments.map(c => {
-      if (c.id === commentId) {
-        return {
-          ...c,
-          replies: [...(c.replies || []), newReply]
-        };
-      }
-      return c;
-    });
-
-    setComments(updatedComments);
-    setReplyText('');
-    setReplyingToId(null);
-    if (replyEditorRef.current) {
-      replyEditorRef.current.innerHTML = '';
-    }
-
-    if (novelId && currentIndex) {
-      const storageKey = `comments_${novelId}_chapter_${currentIndex}`;
-      localStorage.setItem(storageKey, JSON.stringify(updatedComments));
+    try {
+      const created = await CommentService.postChapterComment(currentChapterId, replyText.trim(), commentId);
+      const newReply: Reply = {
+        id: created.id,
+        user: created.user_name || currentUser.name,
+        time: "Vừa xong",
+        text: created.content,
+        avatar: created.user_avatar || currentUser.avatar,
+      };
+      setComments(prev => prev.map(c =>
+        c.id === commentId ? { ...c, replies: [...(c.replies || []), newReply] } : c
+      ));
+      setReplyText('');
+      setReplyingToId(null);
+      if (replyEditorRef.current) replyEditorRef.current.innerHTML = '';
+    } catch {
+      alert("Phản hồi thất bại. Vui lòng đăng nhập và thử lại!");
     }
   };
 
@@ -719,31 +706,25 @@ const ChapterPage: React.FC = () => {
       alert("Vui lòng đăng nhập tài khoản để thích bình luận!");
       return;
     }
-    const updated = comments.map(c => {
-      if (c.id === commentId) {
-        const liked = !c.likedByUser;
-        return {
-          ...c,
-          likedByUser: liked,
-          likes: liked ? c.likes + 1 : Math.max(0, c.likes - 1)
-        };
-      }
-      return c;
-    });
-    setComments(updated);
-    if (novelId && currentIndex) {
-      const storageKey = `comments_${novelId}_chapter_${currentIndex}`;
-      localStorage.setItem(storageKey, JSON.stringify(updated));
-    }
+    const likedKey = `liked_chapter_comments_${currentChapterId}`;
+    const liked: number[] = JSON.parse(localStorage.getItem(likedKey) || '[]');
+    const isLiked = liked.includes(commentId);
+    const updatedLiked = isLiked ? liked.filter(x => x !== commentId) : [...liked, commentId];
+    localStorage.setItem(likedKey, JSON.stringify(updatedLiked));
+    setComments(prev => prev.map(c =>
+      c.id === commentId
+        ? { ...c, likedByUser: !isLiked, likes: isLiked ? Math.max(0, c.likes - 1) : c.likes + 1 }
+        : c
+    ));
   };
 
-  const handleDeleteComment = (commentId: number) => {
+  const handleDeleteComment = async (commentId: number) => {
     if (window.confirm("Bạn có chắc chắn muốn xóa bình luận này?")) {
-      const updated = comments.filter(c => c.id !== commentId);
-      setComments(updated);
-      if (novelId && currentIndex) {
-        const storageKey = `comments_${novelId}_chapter_${currentIndex}`;
-        localStorage.setItem(storageKey, JSON.stringify(updated));
+      try {
+        await CommentService.deleteChapterComment(commentId);
+        setComments(prev => prev.filter(c => c.id !== commentId));
+      } catch {
+        alert("Xóa bình luận thất bại. Bạn chỉ có thể xóa bình luận của chính mình.");
       }
       setActiveCommentMenuId(null);
     }
@@ -755,24 +736,21 @@ const ChapterPage: React.FC = () => {
     setActiveCommentMenuId(null);
   };
 
-  const handleSaveEdit = (commentId: number) => {
+  const handleSaveEdit = async (commentId: number) => {
     if (!editingCommentText.trim()) {
       alert("Nội dung bình luận không được để trống!");
       return;
     }
-    const updated = comments.map(c => {
-      if (c.id === commentId) {
-        return { ...c, text: editingCommentText };
-      }
-      return c;
-    });
-    setComments(updated);
-    if (novelId && currentIndex) {
-      const storageKey = `comments_${novelId}_chapter_${currentIndex}`;
-      localStorage.setItem(storageKey, JSON.stringify(updated));
+    try {
+      const updated = await CommentService.editChapterComment(commentId, editingCommentText);
+      setComments(prev => prev.map(c =>
+        c.id === commentId ? { ...c, text: updated.content } : c
+      ));
+      setEditingCommentId(null);
+      setEditingCommentText('');
+    } catch {
+      alert("Sửa bình luận thất bại. Bạn chỉ có thể sửa bình luận của chính mình.");
     }
-    setEditingCommentId(null);
-    setEditingCommentText('');
   };
 
   // Load preferences from localStorage (UX-friendly)
@@ -1483,7 +1461,7 @@ const ChapterPage: React.FC = () => {
           <div className="flex items-center justify-between mb-6">
             <h2 className="font-display-lg text-lg md:text-xl font-bold flex items-center gap-2">
               <ViconicIcon name="forum" size={20} className="text-primary shrink-0" />
-              <span>Bình luận ({comments.length})</span>
+              <span>Bình luận ({comments.reduce((acc, c) => acc + 1 + (c.replies?.length || 0), 0)})</span>
             </h2>
             <div className={`flex items-center border ${currentTheme.border} rounded-sm overflow-hidden p-0.5 text-[10px] font-bold`}>
               <button
@@ -1619,7 +1597,7 @@ const ChapterPage: React.FC = () => {
                       </div>
                     )}
                   </div>
-                  <button type="submit" className="bg-primary text-on-primary font-bold px-6 py-2 rounded-sm hover:bg-primary/95 transition-colors text-xs shadow-md shadow-primary/10">Đăng cảm nhận</button>
+                  <button type="submit" disabled={commentSubmitting} className="bg-primary text-on-primary font-bold px-6 py-2 rounded-sm hover:bg-primary/95 transition-colors text-xs shadow-md shadow-primary/10 disabled:opacity-60">{commentSubmitting ? 'Đang đăng...' : 'Đăng cảm nhận'}</button>
                 </div>
               </div>
             </form>
@@ -1630,7 +1608,8 @@ const ChapterPage: React.FC = () => {
             {sortedComments.map((comment) => (
               <div
                 key={comment.id}
-                className={`flex gap-3 p-4 rounded-sm border ${currentTheme.border} ${currentTheme.accentBg} hover:bg-opacity-100 transition-colors duration-200`}
+                id={`comment-${comment.id}`}
+                className={`flex gap-3 p-4 rounded-sm border transition-all duration-300 ${highlightedCommentId === comment.id ? 'border-primary shadow-md shadow-primary/20 ring-1 ring-primary/40' : currentTheme.border} ${currentTheme.accentBg} hover:bg-opacity-100`}
               >
                 <div className="relative shrink-0">
                   {isUserVIP(comment.user) ? (

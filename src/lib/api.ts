@@ -271,3 +271,209 @@ export const CoinService = {
     return r.data;
   },
 };
+
+export interface StoryCommentData {
+  id: number;
+  story: number;
+  story_slug: string;
+  story_title: string;
+  user: number;
+  user_name: string;
+  user_avatar: string;
+  content: string;
+  parent: number | null;
+  created_at: string;
+}
+
+export interface ChapterCommentData {
+  id: number;
+  chapter: number;
+  chapter_number: number;
+  story_slug: string;
+  story_title: string;
+  user: number;
+  user_name: string;
+  user_avatar: string;
+  content: string;
+  parent: number | null;
+  created_at: string;
+}
+
+export interface NotificationData {
+  id: number;
+  type: 'reply_comment' | 'vip_expiring' | 'vip_expired';
+  is_read: boolean;
+  data: {
+    reply_user_name?: string;
+    reply_user_avatar?: string;
+    comment_content?: string;
+    sticker_urls?: string[];
+    story_slug?: string;
+    story_title?: string;
+    chapter_number?: number;
+    comment_id?: number;
+  };
+  created_at: string;
+}
+
+export interface GiftType {
+  id: string;
+  name: string;
+  xu: number;
+  tier: 'common' | 'rare' | 'legendary';
+  emoji: string;
+}
+
+export interface DonationData {
+  id: number;
+  story: number;
+  story_title: string;
+  story_slug: string;
+  user: number;
+  user_name: string;
+  user_avatar: string;
+  gift_type: string;
+  gift_name: string;
+  xu_amount: number;
+  created_at: string;
+}
+
+export interface DonationLeaderboardEntry {
+  user_id: number;
+  user_name: string;
+  user_avatar: string;
+  total_xu: number;
+  donation_count: number;
+}
+
+interface PaginatedResponse<T> {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: T[];
+}
+
+export const CommentService = {
+  getStoryComments: async (storySlug: string): Promise<StoryCommentData[]> => {
+    const r = await api.get<PaginatedResponse<StoryCommentData> | StoryCommentData[]>('story-comments/', {
+      params: { story_slug: storySlug, page_size: 100 },
+    });
+    return Array.isArray(r.data) ? r.data : r.data.results;
+  },
+
+  getRecentComments: async (limit = 50): Promise<StoryCommentData[]> => {
+    const r = await api.get<PaginatedResponse<StoryCommentData> | StoryCommentData[]>('story-comments/', {
+      params: { page_size: limit },
+    });
+    return Array.isArray(r.data) ? r.data : r.data.results;
+  },
+
+  postStoryComment: async (storyId: number, content: string, parentId?: number): Promise<StoryCommentData> => {
+    const r = await api.post<StoryCommentData>('story-comments/', {
+      story: storyId,
+      content,
+      ...(parentId ? { parent: parentId } : {}),
+    });
+    return r.data;
+  },
+
+  deleteStoryComment: async (commentId: number): Promise<void> => {
+    await api.delete(`story-comments/${commentId}/`);
+  },
+
+  editStoryComment: async (commentId: number, content: string): Promise<StoryCommentData> => {
+    const r = await api.patch<StoryCommentData>(`story-comments/${commentId}/`, { content });
+    return r.data;
+  },
+
+  getRecentChapterComments: async (limit = 50): Promise<ChapterCommentData[]> => {
+    const r = await api.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
+      params: { page_size: limit },
+    });
+    return Array.isArray(r.data) ? r.data : r.data.results;
+  },
+
+  getChapterComments: async (chapterId: number): Promise<ChapterCommentData[]> => {
+    const r = await api.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
+      params: { chapter_id: chapterId, page_size: 100 },
+    });
+    return Array.isArray(r.data) ? r.data : r.data.results;
+  },
+
+  getChapterCommentsByStory: async (storySlug: string): Promise<ChapterCommentData[]> => {
+    const r = await api.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
+      params: { story_slug: storySlug, page_size: 100 },
+    });
+    return Array.isArray(r.data) ? r.data : r.data.results;
+  },
+
+  postChapterComment: async (chapterId: number, content: string, parentId?: number): Promise<ChapterCommentData> => {
+    const r = await api.post<ChapterCommentData>('chapter-comments/', {
+      chapter: chapterId,
+      content,
+      ...(parentId ? { parent: parentId } : {}),
+    });
+    return r.data;
+  },
+
+  deleteChapterComment: async (commentId: number): Promise<void> => {
+    await api.delete(`chapter-comments/${commentId}/`);
+  },
+
+  editChapterComment: async (commentId: number, content: string): Promise<ChapterCommentData> => {
+    const r = await api.patch<ChapterCommentData>(`chapter-comments/${commentId}/`, { content });
+    return r.data;
+  },
+};
+
+export const NotificationService = {
+  getNotifications: async (): Promise<NotificationData[]> => {
+    const r = await api.get<PaginatedResponse<NotificationData> | NotificationData[]>('notifications/', {
+      params: { page_size: 50 },
+    });
+    return Array.isArray(r.data) ? r.data : r.data.results;
+  },
+
+  getUnreadCount: async (): Promise<number> => {
+    const r = await api.get<{ count: number }>('notifications/unread-count/');
+    return r.data.count;
+  },
+
+  markRead: async (id: number): Promise<void> => {
+    await api.post(`notifications/${id}/mark-read/`);
+  },
+
+  markAllRead: async (): Promise<void> => {
+    await api.post('notifications/mark-all-read/');
+  },
+
+  deleteNotification: async (id: number): Promise<void> => {
+    await api.delete(`notifications/${id}/`);
+  },
+
+  clearAll: async (): Promise<void> => {
+    await api.delete('notifications/clear-all/');
+  },
+};
+
+export const DonationService = {
+  getGiftTypes: async (): Promise<GiftType[]> => {
+    const r = await api.get<GiftType[]>('story-donations/gift-types/');
+    return r.data;
+  },
+
+  donate: async (storySlug: string, giftTypeId: string): Promise<{ success: boolean; coin_balance: number; donation: { id: number; gift_name: string; xu_amount: number } }> => {
+    const r = await api.post('story-donations/', { story_slug: storySlug, gift_type: giftTypeId });
+    return r.data;
+  },
+
+  getDonations: async (params?: { story_slug?: string; month?: string }): Promise<DonationData[]> => {
+    const r = await api.get<PaginatedResponse<DonationData> | DonationData[]>('story-donations/', { params: { ...params, page_size: 50 } });
+    return Array.isArray(r.data) ? r.data : r.data.results;
+  },
+
+  getLeaderboard: async (params?: { story_slug?: string; month?: string }): Promise<DonationLeaderboardEntry[]> => {
+    const r = await api.get<DonationLeaderboardEntry[]>('story-donations/leaderboard/', { params });
+    return r.data;
+  },
+};

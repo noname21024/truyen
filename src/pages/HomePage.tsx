@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import NovelCard from '@/components/cards/NovelCard';
 import RankItem from '@/components/cards/RankItem';
@@ -11,7 +11,7 @@ import 'swiper/css/pagination';
 import novelsDataJson from '@/data/novelsIndex.json';
 import { getAllNovelViews } from '@/lib/viewCountService';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { CategoryService, NovelService } from '@/lib/api';
+import { CategoryService, NovelService, CommentService, type StoryCommentData, type ChapterCommentData } from '@/lib/api';
 
 const novelsData = novelsDataJson as any[];
 
@@ -136,6 +136,18 @@ const HomePage: React.FC = () => {
   const [novels, setNovels] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [currentUser, setCurrentUser] = useState<any | null>(null);
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'followed' | 'history'>('followed');
+  const [followedNovels, setFollowedNovels] = useState<any[]>([]);
+  const [historyNovels, setHistoryNovels] = useState<any[]>([]);
+  const [showAllFollowed, setShowAllFollowed] = useState(false);
+  const [showAllHistory, setShowAllHistory] = useState(false);
+  const [recentComments, setRecentComments] = useState<StoryCommentData[]>([]);
+  const [recentChapterComments, setRecentChapterComments] = useState<ChapterCommentData[]>([]);
+  const [commentSortBy, setCommentSortBy] = useState<'newest' | 'hot'>('newest');
+  const [commentDisplayCount, setCommentDisplayCount] = useState(8);
+  const commentSentinelRef = useRef<HTMLDivElement>(null);
+
   const [categories, setCategories] = useState<Array<{ icon: string; name: string }>>([
     { icon: "favorite", name: "Lãng Mạn" },
     { icon: "swords", name: "Hành Động" },
@@ -196,6 +208,82 @@ const HomePage: React.FC = () => {
       });
   }, []);
 
+  // Load current user
+  useEffect(() => {
+    const saved = localStorage.getItem('user');
+    if (saved) { try { setCurrentUser(JSON.parse(saved)); } catch (e) {} }
+  }, []);
+
+  // Load followed novels
+  useEffect(() => {
+    if (!currentUser) { setFollowedNovels([]); return; }
+    NovelService.getNovels()
+      .then(data => {
+        if (!data) return;
+        const followed = data.filter(n =>
+          localStorage.getItem(`follow_novel_${n.id}_user_${currentUser.name}`) === '1' ||
+          localStorage.getItem(`follow_novel_${n.slug}_user_${currentUser.name}`) === '1'
+        ).map(n => ({
+          id: n.slug,
+          title: n.title,
+          cover: n.cover_url || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
+          author: n.author || "Đang cập nhật",
+          update_time: n.updated_at,
+          total_chapters: n.total_chapters || 0,
+        }));
+        followed.sort((a, b) => new Date(b.update_time).getTime() - new Date(a.update_time).getTime());
+        setFollowedNovels(followed);
+      })
+      .catch(() => {});
+  }, [currentUser]);
+
+  // Load viewing history from localStorage + novels list
+  useEffect(() => {
+    if (novels.length === 0) return;
+    try {
+      const historySlugs: string[] = JSON.parse(localStorage.getItem('viewing_history') || '[]');
+      if (historySlugs.length === 0) { setHistoryNovels([]); return; }
+      const matched = novels.filter(n => historySlugs.includes(n.id)).map(n => ({
+        id: n.id,
+        title: n.title,
+        cover: n.cover || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
+        author: n.author || "Đang cập nhật",
+        update_time: n.update_time,
+        total_chapters: n.chapter_count || 0,
+      }));
+      matched.sort((a, b) => historySlugs.indexOf(a.id) - historySlugs.indexOf(b.id));
+      setHistoryNovels(matched);
+    } catch (e) {}
+  }, [novels]);
+
+  // Load recent story + chapter comments
+  useEffect(() => {
+    CommentService.getRecentComments(60)
+      .then(data => setRecentComments(data))
+      .catch(() => {});
+    CommentService.getRecentChapterComments(60)
+      .then(data => setRecentChapterComments(data))
+      .catch(() => {});
+  }, []);
+
+  // Reset display count when sort changes
+  useEffect(() => { setCommentDisplayCount(8); }, [commentSortBy]);
+
+  // IntersectionObserver for lazy reveal
+  const handleSentinel = useCallback((entries: IntersectionObserverEntry[]) => {
+    if (entries[0].isIntersecting) {
+      setCommentDisplayCount(prev => prev + 8);
+    }
+  }, []);
+
+  useEffect(() => {
+    const el = commentSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(handleSentinel, { threshold: 0.1 });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [handleSentinel]);
+
   // Dynamic novel updates mapped from the real data
   const novelUpdates = novels.map(novel => ({
     id: novel.id,
@@ -237,6 +325,86 @@ const HomePage: React.FC = () => {
   const finalHotNovels = [...hotNovels];
 
   const displayedCategories = showAllCategories ? categories : categories.slice(0, 6);
+
+  const decodeHtml = (html: string) => {
+    const txt = document.createElement('textarea');
+    txt.innerHTML = html;
+    return txt.value;
+  };
+
+  // Render comment content: text + inline sticker images
+  const renderContent = (content: string) => {
+    const parts = content.split(/(<img[^>]*>)/gi);
+    return parts.map((part, i) => {
+      const imgMatch = part.match(/<img[^>]+src="([^"]+)"[^>]*>/i);
+      if (imgMatch) {
+        return <img key={i} src={imgMatch[1]} alt="" className="inline h-5 w-5 object-contain mx-0.5 align-middle" />;
+      }
+      const text = decodeHtml(part.replace(/<[^>]+>/g, ''));
+      return text || null;
+    });
+  };
+
+  const hasVisibleContent = (content: string) => {
+    const text = decodeHtml(content.replace(/<[^>]+>/g, '')).trim();
+    const hasImg = /<img[^>]+>/i.test(content);
+    return text.length > 0 || hasImg;
+  };
+
+  // Normalize story + chapter comments into unified shape
+  type NormalizedComment = {
+    key: string;
+    user_name: string;
+    user_avatar: string;
+    content: string;
+    parent: number | null;
+    created_at: string;
+    story_slug: string;
+    story_title: string;
+    chapter_number?: number;
+    commentType: 'story' | 'chapter';
+    id: number;
+  };
+
+  const allComments: NormalizedComment[] = [
+    ...recentComments.map(c => ({
+      key: `s_${c.id}`,
+      id: c.id,
+      user_name: c.user_name,
+      user_avatar: c.user_avatar,
+      content: c.content,
+      parent: c.parent,
+      created_at: c.created_at,
+      story_slug: c.story_slug,
+      story_title: c.story_title,
+      commentType: 'story' as const,
+    })),
+    ...recentChapterComments.map(c => ({
+      key: `c_${c.id}`,
+      id: c.id,
+      user_name: c.user_name,
+      user_avatar: c.user_avatar,
+      content: c.content,
+      parent: c.parent,
+      created_at: c.created_at,
+      story_slug: c.story_slug,
+      story_title: c.story_title,
+      chapter_number: c.chapter_number,
+      commentType: 'chapter' as const,
+    })),
+  ].filter(c => hasVisibleContent(c.content));
+
+  const replyCountMap: Record<string, number> = {};
+  allComments.forEach(c => {
+    if (c.parent !== null) {
+      const parentKey = `${c.commentType}_${c.parent}`;
+      replyCountMap[parentKey] = (replyCountMap[parentKey] || 0) + 1;
+    }
+  });
+
+  const sortedRecentComments = commentSortBy === 'newest'
+    ? [...allComments].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    : [...allComments].sort((a, b) => (replyCountMap[`${b.commentType}_${b.id}`] || 0) - (replyCountMap[`${a.commentType}_${a.id}`] || 0));
 
   if (loading) {
     return (
@@ -452,67 +620,217 @@ const HomePage: React.FC = () => {
           </div>
         </section>
 
-        {/* Mới Cập Nhật Section */}
-        <section>
-          <div className="flex justify-between items-end mb-6 border-b border-outline-variant/50 pb-4">
-            <div>
-              <h2 className="font-display-lg text-lg sm:text-xl md:text-2xl text-on-surface flex items-center gap-2 truncate">
-                <ViconicIcon name="update" size={24} className="text-primary shrink-0" />
-                Mới Cập Nhật
-              </h2>
-            </div>
-            <Link className="font-bold text-sm text-primary hover:text-primary/80 transition-colors" to="/new-update">
-              Xem tất cả →
-            </Link>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {novelUpdates.slice(0, 18).map((novel) => (
-              <NovelCard 
-                key={novel.id}
-                id={novel.id}
-                title={novel.title} 
-                author={novel.author} 
-                status={novel.status} 
-                statusColor={novel.color} 
-                image={novel.img}
-                views={novel.views}
-                isVip={novel.is_vip}
-              />
-            ))}
-          </div>
-        </section>
+        {/* Two-column: Mới Cập Nhật & Truyện Đã Hoàn Thành + Sidebar */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
 
-        {/* Truyện Đã Hoàn Thành Section */}
-        {completedNovels.length > 0 && (
-          <section>
-            <div className="flex justify-between items-end mb-6 border-b border-outline-variant/50 pb-4">
-              <div>
+          {/* LEFT: Mới Cập Nhật + Truyện Đã Hoàn Thành */}
+          <div className="lg:col-span-8 flex flex-col gap-10 lg:order-1">
+
+            {/* Mới Cập Nhật */}
+            <section>
+              <div className="flex justify-between items-end mb-6 border-b border-outline-variant/50 pb-4">
                 <h2 className="font-display-lg text-lg sm:text-xl md:text-2xl text-on-surface flex items-center gap-2 truncate">
-                  <ViconicIcon name="check_circle" size={24} className="text-primary shrink-0" />
-                  Truyện Đã Hoàn Thành
+                  <ViconicIcon name="update" size={24} className="text-primary shrink-0" />
+                  Mới Cập Nhật
                 </h2>
+                <Link className="font-bold text-sm text-primary hover:text-primary/80 transition-colors" to="/new-update">
+                  Xem tất cả →
+                </Link>
               </div>
-              <Link className="font-bold text-sm text-primary hover:text-primary/80 transition-colors" to="/genres">
-                Xem tất cả →
-              </Link>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              {completedNovels.slice(0, 6).map((novel) => (
-                <NovelCard 
-                  key={novel.id}
-                  id={novel.id}
-                  title={novel.title} 
-                  author={novel.author} 
-                  status={novel.status} 
-                  statusColor={novel.color} 
-                  image={novel.img}
-                  views={novel.views}
-                  isVip={novel.is_vip}
-                />
-              ))}
-            </div>
-          </section>
-        )}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {novelUpdates.slice(0, 12).map((novel) => (
+                  <NovelCard
+                    key={novel.id}
+                    id={novel.id}
+                    title={novel.title}
+                    author={novel.author}
+                    status={novel.status}
+                    statusColor={novel.color}
+                    image={novel.img}
+                    views={novel.views}
+                    isVip={novel.is_vip}
+                  />
+                ))}
+              </div>
+            </section>
+
+            {/* Truyện Đã Hoàn Thành */}
+            {completedNovels.length > 0 && (
+              <section>
+                <div className="flex justify-between items-end mb-6 border-b border-outline-variant/50 pb-4">
+                  <h2 className="font-display-lg text-lg sm:text-xl md:text-2xl text-on-surface flex items-center gap-2 truncate">
+                    <ViconicIcon name="check_circle" size={24} className="text-primary shrink-0" />
+                    Truyện Đã Hoàn Thành
+                  </h2>
+                  <Link className="font-bold text-sm text-primary hover:text-primary/80 transition-colors" to="/genres">
+                    Xem tất cả →
+                  </Link>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                  {completedNovels.slice(0, 8).map((novel) => (
+                    <NovelCard
+                      key={novel.id}
+                      id={novel.id}
+                      title={novel.title}
+                      author={novel.author}
+                      status={novel.status}
+                      statusColor={novel.color}
+                      image={novel.img}
+                      views={novel.views}
+                      isVip={novel.is_vip}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+          </div>
+
+          {/* RIGHT Sidebar */}
+          <div className="lg:col-span-4 flex flex-col gap-6 lg:order-2">
+
+            {/* Following / History widget */}
+            <section className="bg-surface border border-outline-variant/50 p-4 rounded-sm shadow-sm">
+              <div className="flex border-b border-outline-variant/50 mb-4 text-xs font-bold gap-1 pb-1">
+                <button
+                  onClick={() => { setActiveSidebarTab('followed'); setShowAllFollowed(false); }}
+                  className={`flex-grow py-2 text-center rounded transition-all flex items-center justify-center gap-1.5 ${activeSidebarTab === 'followed' ? 'bg-primary text-on-primary shadow-xs' : 'text-on-surface-variant hover:bg-surface-variant/30'}`}
+                >
+                  <ViconicIcon name="favorite" size={14} className="shrink-0" />
+                  Đang Theo Dõi
+                </button>
+                <button
+                  onClick={() => { setActiveSidebarTab('history'); setShowAllHistory(false); }}
+                  className={`flex-grow py-2 text-center rounded transition-all flex items-center justify-center gap-1.5 ${activeSidebarTab === 'history' ? 'bg-primary text-on-primary shadow-xs' : 'text-on-surface-variant hover:bg-surface-variant/30'}`}
+                >
+                  <ViconicIcon name="history" size={14} className="shrink-0" />
+                  Lịch Sử Xem
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                {activeSidebarTab === 'followed' ? (
+                  !currentUser ? (
+                    <div className="text-center py-6 text-xs text-on-surface-variant/70">
+                      Vui lòng đăng nhập để xem danh sách theo dõi.
+                    </div>
+                  ) : followedNovels.length === 0 ? (
+                    <div className="text-center py-6 text-xs text-on-surface-variant/70">Bạn chưa theo dõi truyện nào.</div>
+                  ) : (
+                    <>
+                      {(showAllFollowed ? followedNovels : followedNovels.slice(0, 5)).map(fav => {
+                        const lastRead = localStorage.getItem(`reading_progress_${fav.id}`);
+                        return (
+                          <Link key={fav.id} to={`/detail/${fav.id}`} className="flex gap-3 hover:bg-surface-variant/30 p-1.5 rounded transition-colors group">
+                            <img alt={fav.title} className="w-10 h-14 object-cover rounded-sm border border-outline-variant/50 shrink-0" src={fav.cover} />
+                            <div className="min-w-0 flex-grow flex flex-col justify-center">
+                              <h4 className="font-bold text-xs text-on-surface line-clamp-1 group-hover:text-primary transition-colors">{fav.title}</h4>
+                              <p className="text-[10px] text-on-surface-variant mt-0.5">{fav.author}</p>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                                <span className="text-[10px] font-bold text-on-surface-variant bg-surface-variant/60 px-1.5 py-0.5 rounded border border-outline-variant/30 shrink-0">Mới: C{fav.total_chapters}</span>
+                                {lastRead && <span className="text-[10.5px] font-extrabold text-primary bg-primary/10 px-1.5 py-0.5 rounded shrink-0 animate-pulse">Đang đọc: C{lastRead}</span>}
+                              </div>
+                            </div>
+                          </Link>
+                        );
+                      })}
+                      {followedNovels.length > 5 && (
+                        <button onClick={() => setShowAllFollowed(!showAllFollowed)} className="w-full text-center mt-1 py-2 font-bold text-xs text-primary hover:bg-primary/5 rounded border border-dashed border-outline-variant transition-colors">
+                          {showAllFollowed ? "Thu gọn" : `Xem tất cả (${followedNovels.length})`}
+                        </button>
+                      )}
+                    </>
+                  )
+                ) : (
+                  historyNovels.length === 0 ? (
+                    <div className="text-center py-6 text-xs text-on-surface-variant/70">Chưa có lịch sử xem truyện.</div>
+                  ) : (
+                    <>
+                      {(showAllHistory ? historyNovels : historyNovels.slice(0, 5)).map(hist => {
+                        const lastRead = localStorage.getItem(`reading_progress_${hist.id}`);
+                        return (
+                          <Link key={hist.id} to={`/detail/${hist.id}`} className="flex gap-3 hover:bg-surface-variant/30 p-1.5 rounded transition-colors group">
+                            <img alt={hist.title} className="w-10 h-14 object-cover rounded-sm border border-outline-variant/50 shrink-0" src={hist.cover} />
+                            <div className="min-w-0 flex-grow flex flex-col justify-center">
+                              <h4 className="font-bold text-xs text-on-surface line-clamp-1 group-hover:text-primary transition-colors">{hist.title}</h4>
+                              <p className="text-[10px] text-on-surface-variant mt-0.5">{hist.author}</p>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                                <span className="text-[10px] font-bold text-on-surface-variant bg-surface-variant/60 px-1.5 py-0.5 rounded border border-outline-variant/30 shrink-0">C{hist.total_chapters}</span>
+                                {lastRead && <span className="text-[10.5px] font-extrabold text-primary bg-primary/10 px-1.5 py-0.5 rounded shrink-0">Đang đọc: C{lastRead}</span>}
+                              </div>
+                            </div>
+                          </Link>
+                        );
+                      })}
+                      {historyNovels.length > 5 && (
+                        <button onClick={() => setShowAllHistory(!showAllHistory)} className="w-full text-center mt-1 py-2 font-bold text-xs text-primary hover:bg-primary/5 rounded border border-dashed border-outline-variant transition-colors">
+                          {showAllHistory ? "Thu gọn" : `Xem tất cả (${historyNovels.length})`}
+                        </button>
+                      )}
+                    </>
+                  )
+                )}
+              </div>
+            </section>
+
+            {/* Recent Comments */}
+            <section className="bg-surface border border-outline-variant/50 p-4 rounded-sm shadow-sm">
+              <div className="flex items-center justify-between mb-3 pb-2 border-b border-outline-variant/50">
+                <h3 className="text-xs font-bold text-on-surface flex items-center gap-1.5">
+                  <ViconicIcon name="comment" size={14} className="text-primary shrink-0" />
+                  Bình Luận Gần Đây
+                </h3>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setCommentSortBy('newest')}
+                    className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-colors ${commentSortBy === 'newest' ? 'bg-primary text-on-primary' : 'bg-surface-variant text-on-surface-variant hover:bg-surface-dim'}`}
+                  >
+                    Mới nhất
+                  </button>
+                  <button
+                    onClick={() => setCommentSortBy('hot')}
+                    className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-colors ${commentSortBy === 'hot' ? 'bg-primary text-on-primary' : 'bg-surface-variant text-on-surface-variant hover:bg-surface-dim'}`}
+                  >
+                    Hot nhất
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-[480px] overflow-y-auto space-y-3 pr-1 scrollbar-thin scrollbar-thumb-outline-variant/50 scrollbar-track-transparent">
+                {sortedRecentComments.slice(0, commentDisplayCount).map(comment => {
+                  const href = comment.commentType === 'chapter'
+                    ? `/chapter/${comment.story_slug}/${comment.chapter_number}`
+                    : `/detail/${comment.story_slug}`;
+                  const replyCount = replyCountMap[`${comment.commentType}_${comment.id}`] || 0;
+                  return (
+                    <Link key={comment.key} to={href} className="flex gap-2.5 hover:bg-surface-variant/20 p-1.5 rounded transition-colors group">
+                      <img alt={comment.user_name} className="w-7 h-7 rounded-full object-cover border border-outline-variant/50 shrink-0 mt-0.5" src={comment.user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${comment.user_name}`} />
+                      <div className="min-w-0 flex-grow">
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <span className="text-[10.5px] font-bold text-on-surface truncate">{comment.user_name}</span>
+                          {comment.parent !== null && <span className="text-[9px] bg-surface-variant text-on-surface-variant/70 px-1 py-0.5 rounded shrink-0">↩ Trả lời</span>}
+                          {comment.commentType === 'chapter' && <span className="text-[9px] bg-primary/10 text-primary px-1 py-0.5 rounded shrink-0">C{comment.chapter_number}</span>}
+                          <span className="text-[9px] text-on-surface-variant/60 shrink-0 ml-auto">{new Date(comment.created_at).toLocaleDateString('vi-VN')}</span>
+                        </div>
+                        <p className="text-[10px] text-on-surface-variant line-clamp-2 flex flex-wrap items-center gap-0.5">{renderContent(comment.content)}</p>
+                        <p className="text-[9px] text-primary/70 mt-0.5 truncate group-hover:text-primary transition-colors">{comment.story_title}</p>
+                        {comment.parent === null && replyCount > 0 && <span className="text-[9px] text-on-surface-variant/60">{replyCount} trả lời</span>}
+                      </div>
+                    </Link>
+                  );
+                })}
+                {sortedRecentComments.length === 0 && (
+                  <div className="text-center py-6 text-xs text-on-surface-variant/70">Chưa có bình luận nào.</div>
+                )}
+                {commentDisplayCount < sortedRecentComments.length && (
+                  <div ref={commentSentinelRef} className="py-2 text-center text-[10px] text-on-surface-variant/40">
+                    Đang tải thêm...
+                  </div>
+                )}
+              </div>
+            </section>
+
+          </div>
+        </div>
 
         {/* Bảng Xếp Hạng Section */}
         <section>

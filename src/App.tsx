@@ -10,6 +10,7 @@ import ProfilePage from './pages/ProfilePage'
 import RankingPage from './pages/RankingPage'
 import AuthCallbackPage from './pages/AuthCallbackPage'
 import CoinPage from './pages/CoinPage'
+import DonationLeaderboardPage from './pages/DonationLeaderboardPage'
 import './App.css'
 
 import ScrollToTop from './components/ScrollToTop'
@@ -32,6 +33,7 @@ function App() {
               <Route path="/profile" element={<ProfilePage />} />
               <Route path="/ranking" element={<RankingPage />} />
               <Route path="/coins" element={<CoinPage />} />
+              <Route path="/leaderboard" element={<DonationLeaderboardPage />} />
             </Routes>
           </MainLayout>
         } />
