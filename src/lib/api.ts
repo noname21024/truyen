@@ -10,6 +10,14 @@ export const api = axios.create({
   },
 });
 
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('auth_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 // TypeScript interfaces matching the Django serializers
 export interface Category {
   id: number;
@@ -161,5 +169,105 @@ export const AuthorService = {
   getAuthors: async () => {
     const response = await api.get<Author[]>('authors/');
     return response.data;
+  },
+};
+
+export interface CoinPackage {
+  id: number;
+  coins: number;
+  price: number;
+  label: string;
+  original_price: number;
+  discount: number;
+}
+
+export interface CoinDepositResult {
+  transaction_id: number;
+  qr_url: string;
+  account_number: string;
+  account_name: string;
+  description: string;
+  coins: number;
+  vnd_amount: number;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface CoinTx {
+  id: number;
+  type: 'deposit' | 'spend';
+  status: 'pending' | 'completed' | 'cancelled';
+  coins: number;
+  vnd_amount: number;
+  ref_code: string;
+  note: string;
+  expires_at: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface VIPStatus {
+  is_active: boolean;
+  expires_at: string | null;
+}
+
+export interface StoryPriceInfo {
+  story_title: string;
+  total_paid_chapters: number;
+  already_unlocked: number;
+  locked_count: number;
+  cost_per_chapter: number;
+  total_cost: number;
+  free_up_to: number;
+}
+
+export const CoinService = {
+  getPackages: async () => {
+    const r = await api.get<CoinPackage[]>('coin/packages/');
+    return r.data;
+  },
+  getBalance: async () => {
+    const r = await api.get<{ coin_balance: number; is_vip: boolean; vip_expires_at: string | null }>('coin/balance/');
+    return r.data;
+  },
+  createDeposit: async (packageId: number) => {
+    const r = await api.post<CoinDepositResult>('coin/deposit/', { package_id: packageId });
+    return r.data;
+  },
+  createCustomDeposit: async (amount: number) => {
+    const r = await api.post<CoinDepositResult>('coin/deposit/', { custom_amount: amount });
+    return r.data;
+  },
+  getTransactions: async () => {
+    const r = await api.get<CoinTx[]>('coin/transactions/');
+    return r.data;
+  },
+  unlockChapter: async (chapterId: number) => {
+    const r = await api.post<{ success: boolean; coin_balance: number; already_unlocked?: boolean; via_vip?: boolean }>('coin/unlock/', { chapter_id: chapterId });
+    return r.data;
+  },
+  getUnlockedChapters: async (storySlug: string) => {
+    const r = await api.get<{ unlocked_chapters: number[]; is_vip: boolean; vip_expires_at: string | null; free_up_to: number }>('coin/unlocked/', { params: { story: storySlug } });
+    return r.data;
+  },
+  getVIPStatus: async () => {
+    const r = await api.get<VIPStatus>('coin/vip-status/');
+    return r.data;
+  },
+  subscribeVIP: async () => {
+    const r = await api.post<{ success: boolean; coin_balance: number; is_vip: boolean; vip_expires_at: string }>('coin/subscribe-vip/');
+    return r.data;
+  },
+  reportPayment: async (transactionId: number) => {
+    const r = await api.post<{ success: boolean }>('coin/report-payment/', { transaction_id: transactionId });
+    return r.data;
+  },
+  getStoryPrice: async (storySlug: string) => {
+    const r = await api.get<StoryPriceInfo>('coin/story-price/', { params: { story: storySlug } });
+    return r.data;
+  },
+  buyStory: async (storySlug: string) => {
+    const r = await api.post<{ success: boolean; coin_balance: number; unlocked_count: number; total_cost: number }>('coin/buy-story/', { story_slug: storySlug });
+    return r.data;
   },
 };

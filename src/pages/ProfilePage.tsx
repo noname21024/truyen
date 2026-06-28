@@ -2,26 +2,57 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import ViconicIcon from '@/components/ui/ViconicIcon';
 import NovelCard from '@/components/cards/NovelCard';
-import { NovelService } from '@/lib/api';
+import { NovelService, CoinService } from '@/lib/api';
+import { showCustomAlert, showCustomConfirm } from '@/lib/dialog';
+import { isUserVIP } from '@/lib/user';
 
 const ProfilePage: React.FC = () => {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<any | null>(null);
   const [followedNovels, setFollowedNovels] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'shelf' | 'activity'>('shelf');
+  const [activeTab, setActiveTab] = useState<'shelf' | 'history' | 'purchased'>('shelf');
+  const [historyList, setHistoryList] = useState<any[]>([]);
+  const [purchasedNovels, setPurchasedNovels] = useState<any[]>([]);
+
+  const formatRelativeTime = (isoString: string) => {
+    try {
+      const past = new Date(isoString);
+      const now = new Date();
+      const diffMs = now.getTime() - past.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      if (diffMins < 1) return 'Vừa xong';
+      if (diffMins < 60) return `${diffMins} phút trước`;
+      const diffHours = Math.floor(diffMins / 60);
+      if (diffHours < 24) return `${diffHours} giờ trước`;
+      const diffDays = Math.floor(diffHours / 24);
+      return `${diffDays} ngày trước (${past.toLocaleDateString('vi-VN')})`;
+    } catch {
+      return '';
+    }
+  };
 
   useEffect(() => {
     const saved = localStorage.getItem('user');
     if (!saved) {
-      alert("Vui lòng đăng nhập để truy cập trang cá nhân!");
-      navigate('/');
+      showCustomAlert("Yêu cầu đăng nhập", "Vui lòng đăng nhập để truy cập trang cá nhân!", () => {
+        navigate('/');
+      });
       return;
     }
     
     try {
       const parsedUser = JSON.parse(saved);
       setCurrentUser(parsedUser);
+
+      // Fetch latest balance & VIP status from backend to ensure immediate sync
+      CoinService.getBalance()
+        .then(data => {
+          const updatedUser = { ...parsedUser, coin_balance: data.coin_balance, is_vip: data.is_vip };
+          localStorage.setItem('user', JSON.stringify(updatedUser));
+          setCurrentUser(updatedUser);
+        })
+        .catch(() => {});
 
       // Scan localStorage to find followed novel slugs for this specific user
       const followedSlugs: string[] = [];
@@ -56,11 +87,106 @@ const ProfilePage: React.FC = () => {
     }
   }, [navigate]);
 
+  // Load viewing history and purchased novels when currentUser is loaded
+  useEffect(() => {
+    if (!currentUser) return;
+    
+    // 1. Load viewing history list from localStorage and map with cover images
+    try {
+      const hist = localStorage.getItem('reading_history_list');
+      if (hist) {
+        const parsed = JSON.parse(hist) as any[];
+        NovelService.getNovels()
+          .then(allStories => {
+            const mapped = parsed.map(item => {
+              const matchedNovel = allStories.find(s => s.slug === item.novelId);
+              return {
+                ...item,
+                coverUrl: matchedNovel?.cover_url || 'https://placehold.co/120x168/e2e8f0/64748b?text=Book'
+              };
+            });
+            setHistoryList(mapped);
+          })
+          .catch(() => {
+            setHistoryList(parsed);
+          });
+      }
+    } catch {}
+
+    // 2. Fetch purchased stories by checking spend transactions
+    CoinService.getTransactions()
+      .then(txns => {
+        const spentTxns = txns.filter(t => t.type === 'spend' && t.status === 'completed');
+        const storyTitles = new Set<string>();
+        
+        const parseStoryTitleFromNote = (note: string) => {
+          if (!note) return null;
+          if (note.startsWith("Mở khóa vĩnh viễn: ")) {
+            const withoutPrefix = note.substring("Mở khóa vĩnh viễn: ".length);
+            const hyphenIndex = withoutPrefix.indexOf(" - Chương");
+            return hyphenIndex !== -1 ? withoutPrefix.substring(0, hyphenIndex).trim() : withoutPrefix.trim();
+          }
+          if (note.startsWith("Mua cả bộ: ")) {
+            const withoutPrefix = note.substring("Mua cả bộ: ".length);
+            const parenIndex = withoutPrefix.indexOf(" (");
+            return parenIndex !== -1 ? withoutPrefix.substring(0, parenIndex).trim() : withoutPrefix.trim();
+          }
+          return null;
+        };
+
+        spentTxns.forEach(t => {
+          const title = parseStoryTitleFromNote(t.note);
+          if (title) storyTitles.add(title);
+        });
+
+        NovelService.getNovels()
+          .then(allStories => {
+            const matched: any[] = [];
+            storyTitles.forEach(title => {
+              const found = allStories.find(s => s.title.toLowerCase() === title.toLowerCase());
+              if (found) {
+                matched.push(found);
+              } else {
+                matched.push({
+                  id: title,
+                  slug: '#',
+                  title: title,
+                  author: 'Đang cập nhật',
+                  cover_url: 'https://placehold.co/120x168/e2e8f0/64748b?text=Book',
+                  is_fallback: true
+                });
+              }
+            });
+            setPurchasedNovels(matched);
+          })
+          .catch(() => {
+            setPurchasedNovels(Array.from(storyTitles).map(title => ({
+              id: title,
+              slug: '#',
+              title: title,
+              author: 'Đang cập nhật',
+              cover_url: 'https://placehold.co/120x168/e2e8f0/64748b?text=Book',
+              is_fallback: true
+            })));
+          });
+      })
+      .catch(() => {});
+  }, [currentUser]);
+
   const handleLogout = () => {
-    localStorage.removeItem('user');
-    alert("Đã đăng xuất tài khoản!");
-    navigate('/');
-    window.location.reload();
+    showCustomConfirm(
+      'Đăng xuất',
+      'Bạn có chắc chắn muốn đăng xuất tài khoản hiện tại không?',
+      () => {
+        localStorage.removeItem('user');
+        showCustomAlert("Thành công", "Đã đăng xuất tài khoản!", () => {
+          navigate('/');
+          window.location.reload();
+        });
+      },
+      undefined,
+      'hum:logout'
+    );
   };
 
   if (loading) {
@@ -118,19 +244,44 @@ const ProfilePage: React.FC = () => {
             <div className="px-6 pb-6 relative flex flex-col items-center">
               {/* Avatar */}
               <div className="relative -mt-12 mb-4 shrink-0">
-                <img 
-                  src={currentUser.avatar} 
-                  alt={currentUser.name} 
-                  className="w-24 h-24 rounded-full border-4 border-surface object-cover shadow-md"
-                />
+                {isUserVIP(currentUser.name) ? (
+                  <div className="w-24 h-24 rounded-full vip-avatar-rainbow p-[3px]">
+                    <img 
+                      src={currentUser.avatar} 
+                      alt={currentUser.name} 
+                      className="w-full h-full rounded-full border-4 border-surface object-cover bg-white"
+                    />
+                  </div>
+                ) : (
+                  <img 
+                    src={currentUser.avatar} 
+                    alt={currentUser.name} 
+                    className="w-24 h-24 rounded-full border-4 border-surface object-cover shadow-md"
+                  />
+                )}
                 <div className="absolute bottom-1 right-1 w-5 h-5 bg-green-500 border-4 border-surface rounded-full shadow-sm" />
               </div>
 
               {/* User Bio */}
-              <h2 className="font-display-lg text-lg font-bold text-on-surface mb-0.5 text-center">{currentUser.name}</h2>
-              <span className="font-label-bold text-[10px] text-primary bg-primary/10 px-3 py-1 rounded-full uppercase tracking-wider mb-5">
-                Độc giả thân thiết
-              </span>
+              <h2 className="font-display-lg text-lg font-bold text-on-surface mb-0.5 text-center flex items-center gap-1.5 justify-center">
+                <span>{currentUser.name}</span>
+                {isUserVIP(currentUser.name) && (
+                  <span className="vip-badge-rainbow select-none shrink-0">
+                    <span className="vip-badge-rainbow-inner">
+                      <span className="vip-text-rainbow text-[8px] font-black uppercase">VIP</span>
+                    </span>
+                  </span>
+                )}
+              </h2>
+              {isUserVIP(currentUser.name) ? (
+                <span className="vip-pill-rainbow text-[10px] px-3 py-1 rounded-full uppercase tracking-wider mb-5">
+                  Hội Viên VIP
+                </span>
+              ) : (
+                <span className="font-label-bold text-[10px] text-primary bg-primary/10 px-3 py-1 rounded-full uppercase tracking-wider mb-5">
+                  Độc giả thân thiết
+                </span>
+              )}
 
               {/* Metadata details */}
               <div className="w-full space-y-3 border-t border-b border-outline-variant/30 py-4 mb-5">
@@ -139,7 +290,7 @@ const ProfilePage: React.FC = () => {
                     <ViconicIcon name="mail" size={14} className="shrink-0 text-primary/80" />
                     Email:
                   </span>
-                  <span className="font-bold text-on-surface">docgia@yumenovels.com</span>
+                  <span className="font-bold text-on-surface">docgia@pubnihtruyen.com</span>
                 </div>
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-on-surface-variant flex items-center gap-1.5 font-medium">
@@ -174,7 +325,7 @@ const ProfilePage: React.FC = () => {
         {/* Right Column: User content tabs */}
         <div className="md:col-span-8">
           {/* Tab selector */}
-          <div className="flex border-b border-outline-variant/50 mb-6 font-label-bold text-label-bold text-sm">
+          <div className="flex border-b border-outline-variant/50 mb-6 font-label-bold text-label-bold text-sm overflow-x-auto whitespace-nowrap scrollbar-none">
             <button
               onClick={() => setActiveTab('shelf')}
               className={`pb-3 px-4 border-b-2 transition-all flex items-center gap-2 ${
@@ -187,36 +338,84 @@ const ProfilePage: React.FC = () => {
               <span>Tủ sách theo dõi ({followedNovels.length})</span>
             </button>
             <button
-              onClick={() => setActiveTab('activity')}
+              onClick={() => setActiveTab('history')}
               className={`pb-3 px-4 border-b-2 transition-all flex items-center gap-2 ${
-                activeTab === 'activity'
+                activeTab === 'history'
                   ? 'border-primary text-primary font-bold'
                   : 'border-transparent text-on-surface-variant hover:text-primary'
               }`}
             >
               <ViconicIcon name="history" size={16} className="shrink-0" />
-              <span>Lịch sử hoạt động</span>
+              <span>Lịch sử xem ({historyList.length})</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('purchased')}
+              className={`pb-3 px-4 border-b-2 transition-all flex items-center gap-2 ${
+                activeTab === 'purchased'
+                  ? 'border-primary text-primary font-bold'
+                  : 'border-transparent text-on-surface-variant hover:text-primary'
+              }`}
+            >
+              <ViconicIcon name="payments" size={16} className="shrink-0" />
+              <span>Truyện đã mua ({purchasedNovels.length})</span>
             </button>
           </div>
-
-          {/* Tab Content 1: Bookshelf Grid */}
+ 
+          {/* Tab Content 1: Bookshelf List */}
           {activeTab === 'shelf' && (
-            <div>
+            <div className="space-y-4">
               {followedNovels.length > 0 ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-6">
-                  {followedNovels.map((novel) => (
-                    <NovelCard 
-                      key={novel.id}
-                      id={novel.slug}
-                      title={novel.title}
-                      author={novel.author || "Đang cập nhật"}
-                      status={novel.status === 'COMPLETED' ? 'Hoàn thành' : 'Đang ra'}
-                      statusColor={novel.status === 'COMPLETED' ? 'bg-blue-600 text-white' : 'bg-primary text-on-primary'}
-                      image={novel.cover_url}
-                      views={novel.view_count}
-                    />
-                  ))}
-                </div>
+                followedNovels.map((novel) => (
+                  <div key={novel.id} className="flex gap-4 p-3 border border-outline-variant/30 rounded-lg bg-surface/50 hover:bg-surface-variant/10 transition-colors duration-200">
+                    {/* Novel Cover Image */}
+                    <Link to={`/detail/${novel.slug}`} className="w-16 h-22 sm:w-20 sm:h-28 rounded-md overflow-hidden shrink-0 shadow-sm border border-outline-variant/30 relative group block">
+                      <img 
+                        src={novel.cover_url || 'https://placehold.co/120x168/e2e8f0/64748b?text=Book'} 
+                        alt={novel.title} 
+                        className="w-full h-full object-cover"
+                      />
+                    </Link>
+                    
+                    {/* Novel Details */}
+                    <div className="flex flex-col justify-between py-1 flex-grow min-w-0">
+                      <div className="space-y-1">
+                        <div className="flex items-start gap-2 justify-between">
+                          <Link 
+                            to={`/detail/${novel.slug}`} 
+                            className="font-bold text-sm sm:text-base text-on-surface hover:text-primary transition-colors line-clamp-1 flex-grow"
+                          >
+                            {novel.title}
+                          </Link>
+                          {novel.is_vip && (
+                            <span className="shrink-0 text-[9px] font-black uppercase bg-primary/20 text-primary border border-primary/30 px-1.5 py-0.5 rounded-sm">
+                              VIP
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-on-surface-variant/85">
+                          Tác giả: <span className="font-semibold text-on-surface">{novel.author || "Đang cập nhật"}</span>
+                        </p>
+                        <p className="text-xs text-on-surface-variant">
+                          Chương mới nhất: <span className="font-bold text-primary">Chương {novel.total_chapters || 0}</span>
+                        </p>
+                      </div>
+                      
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-outline-variant/10 pt-2 mt-1">
+                        <div className="flex items-center gap-1.5 text-[10px] text-outline">
+                          <ViconicIcon name="schedule" size={12} className="shrink-0" />
+                          <span>Cập nhật {formatRelativeTime(novel.updated_at)}</span>
+                        </div>
+                        <span className={`text-[9px] font-bold px-2.5 py-0.5 rounded-full ${
+                          novel.status === 'COMPLETED' 
+                            ? 'bg-blue-500/10 text-blue-600 border border-blue-500/20' 
+                            : 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                        }`}>
+                          {novel.status === 'COMPLETED' ? 'Hoàn thành' : 'Đang ra'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))
               ) : (
                 <div className="text-center py-16 border border-dashed border-outline-variant/50 rounded-sm p-6">
                   <div className="w-16 h-16 bg-surface-variant/30 text-outline rounded-full flex items-center justify-center mx-auto mb-4 border border-outline-variant/30">
@@ -237,45 +436,100 @@ const ProfilePage: React.FC = () => {
               )}
             </div>
           )}
-
-          {/* Tab Content 2: Activity List (Mocked / Local logs) */}
-          {activeTab === 'activity' && (
+ 
+          {/* Tab Content 2: Reading History List */}
+          {activeTab === 'history' && (
             <div className="space-y-4">
-              <div className="flex gap-4 p-4 border border-outline-variant/30 rounded-sm bg-surface/50">
-                <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 border border-primary/20">
-                  <ViconicIcon name="favorite" size={16} className="shrink-0" />
-                </div>
-                <div className="flex-grow">
-                  <p className="text-xs text-on-surface font-medium">
-                    Bạn đã thêm bộ truyện <Link to="/detail/xuyen-thanh-cong-chua-dien-trong-thoi-loan-the-bat-dau-bang-viec-cuop-boc-de-dung-nuoc" className="text-primary font-bold hover:underline">Xuyên Thành Công Chúa Điên Trong Thời Loạn Thế...</Link> vào danh sách theo dõi.
+              {historyList.length > 0 ? (
+                historyList.map((item, idx) => (
+                  <div key={idx} className="flex gap-4 p-3 border border-outline-variant/30 rounded-lg bg-surface/50 hover:bg-surface-variant/10 transition-colors duration-200">
+                    {/* Novel Cover Image */}
+                    <Link to={`/detail/${item.novelId}`} className="w-16 h-22 sm:w-20 sm:h-28 rounded-md overflow-hidden shrink-0 shadow-sm border border-outline-variant/30 relative group block">
+                      <img 
+                        src={item.coverUrl || 'https://placehold.co/120x168/e2e8f0/64748b?text=Book'} 
+                        alt={item.novelTitle} 
+                        className="w-full h-full object-cover"
+                      />
+                    </Link>
+                    
+                    {/* Reading Details */}
+                    <div className="flex flex-col justify-between py-1 flex-grow min-w-0">
+                      <div className="space-y-1">
+                        <Link 
+                          to={`/detail/${item.novelId}`} 
+                          className="font-bold text-sm sm:text-base text-on-surface hover:text-primary transition-colors line-clamp-1 block"
+                        >
+                          {item.novelTitle}
+                        </Link>
+                        <p className="text-xs text-on-surface-variant line-clamp-1">
+                          Đã xem: <span className="font-bold text-primary">{item.chapterTitle}</span>
+                        </p>
+                      </div>
+                      
+                      <div className="flex items-center gap-1.5 text-[10px] text-outline font-medium">
+                        <ViconicIcon name="schedule" size={12} className="shrink-0" />
+                        <span>Xem {formatRelativeTime(item.timestamp)}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-16 border border-dashed border-outline-variant/50 rounded-sm p-6">
+                  <div className="w-16 h-16 bg-surface-variant/30 text-outline rounded-full flex items-center justify-center mx-auto mb-4 border border-outline-variant/30">
+                    <ViconicIcon name="history" size={32} className="shrink-0 text-outline-variant" />
+                  </div>
+                  <h3 className="font-display-lg text-base font-bold text-on-surface mb-2">Lịch sử xem trống</h3>
+                  <p className="text-xs text-on-surface-variant/80 max-w-sm mx-auto mb-6">
+                    Bạn chưa đọc chương truyện nào gần đây. Hãy chọn một tác phẩm và bắt đầu thưởng thức ngay!
                   </p>
-                  <span className="text-[10px] text-outline font-medium block mt-1">Vừa xong</span>
+                  <Link 
+                    to="/" 
+                    className="bg-primary text-on-primary font-bold text-xs px-6 py-2.5 rounded-sm hover:bg-primary/90 transition-colors inline-flex items-center gap-1.5 shadow-md shadow-primary/10 active:scale-95"
+                  >
+                    <ViconicIcon name="auto_stories" size={14} className="shrink-0" />
+                    Đọc truyện mới
+                  </Link>
                 </div>
-              </div>
+              )}
+            </div>
+          )}
 
-              <div className="flex gap-4 p-4 border border-outline-variant/30 rounded-sm bg-surface/50">
-                <div className="w-8 h-8 rounded-full bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0 border border-amber-500/20">
-                  <ViconicIcon name="star" size={16} className="shrink-0" />
+          {/* Tab Content 3: Purchased Novels Grid */}
+          {activeTab === 'purchased' && (
+            <div>
+              {purchasedNovels.length > 0 ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-6">
+                  {purchasedNovels.map((novel) => (
+                    <NovelCard 
+                      key={novel.id}
+                      id={novel.slug}
+                      title={novel.title}
+                      author={novel.author || "Đang cập nhật"}
+                      status={novel.status === 'COMPLETED' ? 'Hoàn thành' : 'Đang ra'}
+                      image={novel.cover_url}
+                      views={novel.view_count || 0}
+                      isVip={novel.is_vip}
+                    />
+                  ))}
                 </div>
-                <div className="flex-grow">
-                  <p className="text-xs text-on-surface font-medium">
-                    Bạn đã gửi đánh giá <strong className="text-amber-500">5 sao</strong> cho tác phẩm <Link to="/detail/xuyen-thanh-cong-chua-dien-trong-thoi-loan-the-bat-dau-bang-viec-cuop-boc-de-dung-nuoc" className="text-primary font-bold hover:underline">Xuyên Thành Công Chúa Điên Trong Thời Loạn Thế...</Link>
+              ) : (
+                <div className="text-center py-16 border border-dashed border-outline-variant/50 rounded-sm p-6">
+                  <div className="w-16 h-16 bg-surface-variant/30 text-outline rounded-full flex items-center justify-center mx-auto mb-4 border border-outline-variant/30">
+                    <ViconicIcon name="payments" size={32} className="shrink-0 text-outline-variant" />
+                  </div>
+                  <h3 className="font-display-lg text-base font-bold text-on-surface mb-2">Chưa mua truyện nào</h3>
+                  <p className="text-xs text-on-surface-variant/80 max-w-sm mx-auto mb-6">
+                    Bạn chưa thực hiện giao dịch mở khóa chương truyện hay mua cả bộ truyện nào bằng xu.
                   </p>
-                  <span className="text-[10px] text-outline font-medium block mt-1">10 phút trước</span>
+                  <Link 
+                    to="/" 
+                    className="bg-primary text-on-primary font-bold text-xs px-6 py-2.5 rounded-sm hover:bg-primary/90 transition-colors inline-flex items-center gap-1.5 shadow-md shadow-primary/10 active:scale-95"
+                  >
+                    <ViconicIcon name="explore" size={14} className="shrink-0" />
+                    Khám phá truyện VIP
+                  </Link>
                 </div>
-              </div>
-
-              <div className="flex gap-4 p-4 border border-outline-variant/30 rounded-sm bg-surface/50">
-                <div className="w-8 h-8 rounded-full bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0 border border-blue-500/20">
-                  <ViconicIcon name="login" size={16} className="shrink-0" />
-                </div>
-                <div className="flex-grow">
-                  <p className="text-xs text-on-surface font-medium">
-                    Đăng nhập thành công vào hệ thống YumeNovels qua cổng kết nối Google.
-                  </p>
-                  <span className="text-[10px] text-outline font-medium block mt-1">20 phút trước</span>
-                </div>
-              </div>
+              )}
             </div>
           )}
         </div>

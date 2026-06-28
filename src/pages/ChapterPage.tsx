@@ -3,7 +3,8 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import novelsDataJson from '@/data/novelsIndex.json';
 import { incrementNovelView } from '@/lib/viewCountService';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { NovelService, ChapterService } from '@/lib/api';
+import { NovelService, ChapterService, CoinService } from '@/lib/api';
+import { isUserVIP } from '@/lib/user';
 import { TtsSession, PATH_MAP } from '@realtimex/piper-tts-web';
 import { Play, Pause, SkipForward, SkipBack, Loader2 } from 'lucide-react';
 import { STICKER_SETS } from '@/data/stickers';
@@ -201,6 +202,18 @@ const ChapterPage: React.FC = () => {
   const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
   const [editingCommentText, setEditingCommentText] = useState('');
 
+  // --- VIP chapter lock ---
+  const UNLOCK_COST = 100;
+  const [freeUpTo, setFreeUpTo] = useState(50); // updated from API based on story's total chapters
+  const [currentChapterId, setCurrentChapterId] = useState<number | null>(null);
+  const [unlockedChapters, setUnlockedChapters] = useState<number[]>([]);
+  const [isVIPMember, setIsVIPMember] = useState(false);
+  const [, setVipExpiresAt] = useState<string | null>(null);
+  const [coinBalance, setCoinBalance] = useState<number>(() => {
+    try { return JSON.parse(localStorage.getItem('user') || '{}').coin_balance ?? 0; } catch { return 0; }
+  });
+  const [isUnlocking, setIsUnlocking] = useState(false);
+
   // --- Fixed floating control bar visibility (IntersectionObserver) ---
   const [isHeaderControlsVisible, setIsHeaderControlsVisible] = useState(false);
   const originalBarRef = useRef<HTMLDivElement>(null);
@@ -388,6 +401,50 @@ const ChapterPage: React.FC = () => {
       try { setCurrentUser(JSON.parse(saved)); } catch (e) { }
     }
   }, []);
+
+  // Fetch unlocked chapters + VIP status when this is a VIP novel and user is logged in
+  useEffect(() => {
+    if (novel?.is_vip && currentUser && novelId) {
+      CoinService.getUnlockedChapters(novelId)
+        .then(data => {
+          setUnlockedChapters(data.unlocked_chapters);
+          setIsVIPMember(data.is_vip);
+          setVipExpiresAt(data.vip_expires_at);
+          setFreeUpTo(data.free_up_to);
+        })
+        .catch(() => {});
+    }
+  }, [novel?.is_vip, currentUser, novelId]);
+
+  // Sync coin balance from localStorage on mount
+  useEffect(() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || '{}');
+      setCoinBalance(u.coin_balance ?? 0);
+    } catch {}
+  }, [currentUser]);
+
+  const isLocked = novel?.is_vip && currentIndex > freeUpTo && !isVIPMember && !unlockedChapters.includes(currentIndex);
+
+  const handleUnlock = async () => {
+    if (!currentChapterId || isUnlocking) return;
+    setIsUnlocking(true);
+    try {
+      const result = await CoinService.unlockChapter(currentChapterId);
+      setUnlockedChapters(prev => [...prev, currentIndex]);
+      setCoinBalance(result.coin_balance);
+      try {
+        const u = JSON.parse(localStorage.getItem('user') || '{}');
+        u.coin_balance = result.coin_balance;
+        localStorage.setItem('user', JSON.stringify(u));
+      } catch {}
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || 'Mở khóa chương thất bại. Vui lòng thử lại.';
+      alert(msg);
+    } finally {
+      setIsUnlocking(false);
+    }
+  };
 
   // Back to top scroll listener
   useEffect(() => {
@@ -801,6 +858,7 @@ const ChapterPage: React.FC = () => {
             title: data.title,
             cover: data.cover_url,
             folder: data.slug,
+            is_vip: data.is_vip,
           };
           setNovel(mapped);
           if (data.chapters && data.chapters.length > 0) {
@@ -833,6 +891,7 @@ const ChapterPage: React.FC = () => {
       ChapterService.getChapterByNumber(novelId, currentIndex)
         .then(chap => {
           if (chap) {
+            setCurrentChapterId(chap.id);
             ChapterService.getChapterContent(chap.id)
               .then(data => {
                 setChapterData(data);
@@ -880,15 +939,6 @@ const ChapterPage: React.FC = () => {
     }
   }, [novelId, currentIndex]);
 
-  if (!novel && !loading) {
-    return (
-      <div className="pt-20 pb-12 px-6 text-center text-on-surface">
-        <h1 className="font-display-lg text-xl md:text-2xl mb-4">Truyện không tồn tại</h1>
-        <Link to="/" className="text-primary hover:underline">Quay lại trang chủ</Link>
-      </div>
-    );
-  }
-
   const parsedTitle = useMemo(() => {
     const fullTitle = chapterData?.title || `Chương ${currentIndex}`;
     const colonIndex = fullTitle.indexOf(':');
@@ -899,6 +949,46 @@ const ChapterPage: React.FC = () => {
     }
     return { num: '', name: fullTitle };
   }, [chapterData, currentIndex]);
+
+  // Save viewed chapter to reading history list
+  useEffect(() => {
+    if (!novelId || !currentIndex || !chapterData?.title) return;
+    try {
+      const historyStr = localStorage.getItem('reading_history_list') || '[]';
+      const history = JSON.parse(historyStr) as any[];
+      // Filter out duplicate chapters of the same novel
+      const filtered = history.filter((item: any) => item.novelId !== novelId);
+      
+      let novelTitle = novel?.title;
+      if (!novelTitle) {
+        const staticNovel = novelsData.find(n => n.id === novelId);
+        novelTitle = staticNovel?.title || novelId;
+      }
+      
+      const newItem = {
+        novelId,
+        novelTitle,
+        chapterNumber: currentIndex,
+        chapterTitle: chapterData.title,
+        timestamp: new Date().toISOString()
+      };
+      
+      const updated = [newItem, ...filtered].slice(0, 30);
+      localStorage.setItem('reading_history_list', JSON.stringify(updated));
+      localStorage.setItem(`reading_progress_${novelId}`, currentIndex.toString());
+    } catch (e) {
+      console.error("Failed to save reading history list:", e);
+    }
+  }, [novelId, currentIndex, chapterData?.title, novel?.title]);
+
+  if (!novel && !loading) {
+    return (
+      <div className="pt-20 pb-12 px-6 text-center text-on-surface">
+        <h1 className="font-display-lg text-xl md:text-2xl mb-4">Truyện không tồn tại</h1>
+        <Link to="/" className="text-primary hover:underline">Quay lại trang chủ</Link>
+      </div>
+    );
+  }
 
   const currentTheme = THEME_CLASSES[theme];
 
@@ -1270,6 +1360,66 @@ const ChapterPage: React.FC = () => {
                 <div className={`h-[18px] ${currentTheme.skeleton} rounded w-[72%]`} />
               </div>
             </div>
+          ) : isLocked ? (
+            <div className="min-h-[420px] flex flex-col items-center justify-center gap-5 py-16 border border-dashed rounded-md">
+              <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center">
+                <ViconicIcon name="lock" size={38} className="text-primary" />
+              </div>
+              <div className="text-center">
+                <span className="inline-block mb-2 text-[10px] font-black uppercase tracking-widest text-primary px-3 py-1 bg-primary/10 rounded-full">VIP</span>
+                <h3 className="font-bold text-lg mb-1">Chương khóa</h3>
+                <p className="text-sm opacity-60">Chương {currentIndex} chỉ dành cho độc giả VIP.</p>
+              </div>
+              {currentUser ? (
+                <div className="flex flex-col items-center gap-4 w-full max-w-xs">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <ViconicIcon name="toll" size={16} className="text-primary shrink-0" />
+                    <span>Số dư: <strong className="text-primary">{coinBalance.toLocaleString('vi-VN')} xu</strong></span>
+                  </div>
+
+                  {/* Option 1: Buy chapter permanently */}
+                  {coinBalance >= UNLOCK_COST ? (
+                    <button
+                      onClick={handleUnlock}
+                      disabled={isUnlocking}
+                      className="w-full bg-primary text-on-primary px-6 py-3 rounded-sm font-bold text-sm flex items-center justify-center gap-2 shadow-md shadow-primary/20 disabled:opacity-60 hover:bg-primary/95 transition-colors"
+                    >
+                      {isUnlocking ? (
+                        <><span className="w-4 h-4 border-2 border-on-primary border-t-transparent rounded-full animate-spin" /> Đang mở khóa...</>
+                      ) : (
+                        <><ViconicIcon name="lock_open" size={16} />Mở khóa vĩnh viễn · {UNLOCK_COST} xu</>
+                      )}
+                    </button>
+                  ) : (
+                    <Link
+                      to="/coins"
+                      className="w-full bg-primary text-on-primary px-6 py-3 rounded-sm font-bold text-sm flex items-center justify-center gap-2 shadow-md shadow-primary/20 hover:bg-primary/95 transition-colors"
+                    >
+                      <ViconicIcon name="add_circle" size={16} />Nạp xu · cần thêm {(UNLOCK_COST - coinBalance).toLocaleString()} xu
+                    </Link>
+                  )}
+                  <p className="text-[10px] text-on-surface-variant text-center">Mua chương = sở hữu vĩnh viễn, không bao giờ mất quyền đọc.</p>
+
+                  {/* Option 2: Subscribe VIP */}
+                  <div className="w-full border-t border-dashed border-outline-variant/40 pt-4 flex flex-col items-center gap-2">
+                    <p className="text-xs font-semibold opacity-70">Hoặc đăng ký hội viên để đọc <strong>tất cả</strong> truyện VIP</p>
+                    <Link
+                      to="/coins"
+                      className="w-full border-2 border-primary text-primary px-6 py-2.5 rounded-sm font-bold text-sm flex items-center justify-center gap-2 hover:bg-primary/5 transition-colors"
+                    >
+                      <ViconicIcon name="workspace_premium" size={16} />Hội viên · 49.000 xu/tháng
+                    </Link>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => window.dispatchEvent(new CustomEvent('open-login-dialog'))}
+                  className="bg-primary text-on-primary px-8 py-3 rounded-sm font-bold text-sm flex items-center gap-2 shadow-md shadow-primary/20 hover:bg-primary/95 transition-colors"
+                >
+                  <ViconicIcon name="login" size={16} />Đăng nhập để mở khóa
+                </button>
+              )}
+            </div>
           ) : chapterData ? (
             renderChapterContent()
           ) : (
@@ -1279,7 +1429,7 @@ const ChapterPage: React.FC = () => {
           )}
 
           {/* Chapter Ending Separator */}
-          {!loading && chapterData && (
+          {!loading && chapterData && !isLocked && (
             <div className="flex justify-center mt-16 items-center gap-4 opacity-30">
               <div className={`h-[1px] w-20 ${theme === 'dark' ? 'bg-white' : 'bg-slate-800'}`} />
               <ViconicIcon name="menu_book" size={16} className="shrink-0" />
@@ -1366,7 +1516,7 @@ const ChapterPage: React.FC = () => {
               <button
                 onClick={() => {
                   const mockUser = {
-                    name: "Độc Giả Yume",
+                    name: "Độc Giả Pub Nih",
                     avatar: "https://lh3.googleusercontent.com/aida-public/AB6AXuAb-14uOcA3z6oOYNNXFQZMGk5LqtQxM2cL7kShQ6UO4TvOht8YiLfBJY-3bihJuLgXze9CkbXBa6QFIw9VqTUHkpB50TncEOMChL_WpiVyFICNRCgDJc9ARVe1kNnxXUnO8MK2up2wRutKKiFBjnuceM8exGI8iRAvDvvXidxorqEi32E5PB2o9k-EKsrzj1ffNHQkPDA5LxhyYhJbSWfwvAlEKTTvNwgrsUxFkPJ1FnXVSIeWsLB4K3mNSVpSarNi49k0D31ynmtw"
                   };
                   localStorage.setItem('user', JSON.stringify(mockUser));
@@ -1382,11 +1532,17 @@ const ChapterPage: React.FC = () => {
             </div>
           ) : (
             <form onSubmit={handleAddComment} className="mb-8 flex gap-4">
-              <img
-                alt="Your avatar"
-                className={`w-10 h-10 rounded-sm shrink-0 object-cover border ${currentTheme.border}`}
-                src={currentUser.avatar}
-              />
+              {currentUser && isUserVIP(currentUser.name) ? (
+                <div className="w-10 h-10 rounded-sm shrink-0 vip-avatar-rainbow">
+                  <img alt="Your avatar" className="w-full h-full rounded-sm object-cover bg-white" src={currentUser.avatar} />
+                </div>
+              ) : (
+                <img
+                  alt="Your avatar"
+                  className={`w-10 h-10 rounded-sm shrink-0 object-cover border ${currentTheme.border}`}
+                  src={currentUser.avatar}
+                />
+              )}
               <div className="flex-grow flex flex-col gap-2.5">
                 <style>{`
               .rich-editor:empty:before {
@@ -1477,16 +1633,31 @@ const ChapterPage: React.FC = () => {
                 className={`flex gap-3 p-4 rounded-sm border ${currentTheme.border} ${currentTheme.accentBg} hover:bg-opacity-100 transition-colors duration-200`}
               >
                 <div className="relative shrink-0">
-                  <img
-                    alt={comment.user}
-                    className={`w-10 h-10 rounded-sm object-cover border ${currentTheme.border}`}
-                    src={comment.avatar}
-                  />
+                  {isUserVIP(comment.user) ? (
+                    <div className="w-10 h-10 rounded-sm vip-avatar-rainbow">
+                      <img alt={comment.user} className="w-full h-full rounded-sm object-cover bg-white" src={comment.avatar} />
+                    </div>
+                  ) : (
+                    <img
+                      alt={comment.user}
+                      className={`w-10 h-10 rounded-sm object-cover border ${currentTheme.border}`}
+                      src={comment.avatar}
+                    />
+                  )}
                 </div>
                 <div className="flex-grow min-w-0">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-baseline gap-2 truncate">
-                      <span className="font-label-bold text-xs truncate">{comment.user}</span>
+                    <div className="flex items-center gap-1.5 truncate">
+                      <span className={`font-label-bold text-xs truncate ${isUserVIP(comment.user) ? 'text-primary font-black' : ''}`}>
+                        {comment.user}
+                      </span>
+                      {isUserVIP(comment.user) && (
+                        <span className="vip-badge-rainbow select-none shrink-0">
+                          <span className="vip-badge-rainbow-inner">
+                            <span className="vip-text-rainbow text-[7px] font-black uppercase">VIP</span>
+                          </span>
+                        </span>
+                      )}
                       <span className="text-[9px] opacity-60 font-bold uppercase tracking-widest shrink-0">{comment.time}</span>
                     </div>
 
@@ -1583,10 +1754,23 @@ const ChapterPage: React.FC = () => {
                     <div className="mt-3.5 space-y-3.5 pl-4 border-l-2 border-dashed border-current/20 animate-in fade-in duration-300">
                       {comment.replies.map((reply) => (
                         <div key={reply.id} className={`flex gap-2.5 p-2.5 rounded-sm border ${currentTheme.border} bg-current/5`}>
-                          <img alt={reply.user} className={`w-8 h-8 rounded-sm object-cover border ${currentTheme.border} shrink-0`} src={reply.avatar} />
+                          {isUserVIP(reply.user) ? (
+                            <div className="w-8 h-8 rounded-sm vip-avatar-rainbow shrink-0">
+                              <img alt={reply.user} className="w-full h-full rounded-sm object-cover bg-white" src={reply.avatar} />
+                            </div>
+                          ) : (
+                            <img alt={reply.user} className={`w-8 h-8 rounded-sm object-cover border ${currentTheme.border} shrink-0`} src={reply.avatar} />
+                          )}
                           <div className="flex-grow min-w-0">
-                            <div className="flex items-baseline gap-2 truncate">
-                              <span className="font-label-bold text-[11px] truncate">{reply.user}</span>
+                            <div className="flex items-center gap-1.5 truncate">
+                              <span className={`font-label-bold text-[11px] truncate ${isUserVIP(reply.user) ? 'text-primary font-black' : ''}`}>{reply.user}</span>
+                               {isUserVIP(reply.user) && (
+                                <span className="vip-badge-rainbow select-none shrink-0">
+                                  <span className="vip-badge-rainbow-inner">
+                                    <span className="vip-text-rainbow text-[7px] font-black uppercase">VIP</span>
+                                  </span>
+                                </span>
+                              )}
                               <span className="text-[8px] opacity-60 font-bold uppercase tracking-widest shrink-0">{reply.time}</span>
                             </div>
                             <p
@@ -1602,7 +1786,13 @@ const ChapterPage: React.FC = () => {
                   {/* Reply Form */}
                   {replyingToId === comment.id && (
                     <form onSubmit={(e) => handleAddReply(comment.id, e)} className={`mt-3 p-2 sm:p-3 rounded-sm border border-dashed ${currentTheme.border} bg-current/5 flex gap-2 sm:gap-3 animate-in slide-in-from-top-2 duration-200`}>
-                      <img alt="Your avatar" className={`w-6 h-6 sm:w-8 sm:h-8 rounded-sm shrink-0 object-cover border ${currentTheme.border}`} src={currentUser ? currentUser.avatar : "https://lh3.googleusercontent.com/aida-public/AB6AXuD1epYzUm9PYg5Z4v3zZXDsv3Ph06NlgpommDOBvTTqpLS3sgVhIeXPPp9WnpwOkdoqtjcPa7sGjgQfoBHy1XdCxXIKD7tqus0SdH1HPjLIKxGI69O0lGijT1mmXVujCcTxU8e4qviArMpb35YAx9YX9MqEvEk89DXG1XvQL29j24ny5Zf8gpuufV0HirEieDmpzG4wzbSixeeYFb8Jzm5F7Pj_zz0pQAd7bOyes99b2icDY6xwJomVgVwm7mLtPK9U6SCF3BpQUm0w"} />
+                      {currentUser && isUserVIP(currentUser.name) ? (
+                        <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-sm shrink-0 vip-avatar-rainbow">
+                          <img alt="Your avatar" className="w-full h-full rounded-sm object-cover bg-white" src={currentUser.avatar} />
+                        </div>
+                      ) : (
+                        <img alt="Your avatar" className={`w-6 h-6 sm:w-8 sm:h-8 rounded-sm shrink-0 object-cover border ${currentTheme.border}`} src={currentUser ? currentUser.avatar : "https://lh3.googleusercontent.com/aida-public/AB6AXuD1epYzUm9PYg5Z4v3zZXDsv3Ph06NlgpommDOBvTTqpLS3sgVhIeXPPp9WnpwOkdoqtjcPa7sGjgQfoBHy1XdCxXIKD7tqus0SdH1HPjLIKxGI69O0lGijT1mmXVujCcTxU8e4qviArMpb35YAx9YX9MqEvEk89DXG1XvQL29j24ny5Zf8gpuufV0HirEieDmpzG4wzbSixeeYFb8Jzm5F7Pj_zz0pQAd7bOyes99b2icDY6xwJomVgVwm7mLtPK9U6SCF3BpQUm0w"} />
+                      )}
                       <div className="flex-grow flex flex-col gap-2">
                         <div
                           ref={replyEditorRef}

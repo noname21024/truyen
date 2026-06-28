@@ -5,7 +5,8 @@ import novelsDataJson from '@/data/novelsIndex.json';
 const novelsData = novelsDataJson as any[];
 import { getNovelViews } from '@/lib/viewCountService';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { NovelService } from '@/lib/api';
+import { NovelService, CoinService, type StoryPriceInfo } from '@/lib/api';
+import { isUserVIP } from '@/lib/user';
 import { STICKER_SETS } from '@/data/stickers';
 
 
@@ -69,7 +70,6 @@ const DetailPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   const [isDescExpanded, setIsDescExpanded] = useState(false);
-  const [showAllChapters, setShowAllChapters] = useState(false);
   const [viewCount, setViewCount] = useState(0);
 
   const [comments, setComments] = useState<Comment[]>([]);
@@ -84,7 +84,75 @@ const DetailPage: React.FC = () => {
   const [hoverRating, setHoverRating] = useState(0);
 
   const [currentUser, setCurrentUser] = useState<any | null>(null);
+  const [storyPrice, setStoryPrice] = useState<StoryPriceInfo | null>(null);
+  const [buyingStory, setBuyingStory] = useState(false);
   const [isFollowed, setIsFollowed] = useState(false);
+  const [unlockedChapters, setUnlockedChapters] = useState<number[]>([]);
+  const [freeUpTo, setFreeUpTo] = useState<number>(50);
+  const [balance, setBalance] = useState<number>(0);
+  const [chapterSearchQuery, setChapterSearchQuery] = useState('');
+  const [chapterSortOrder, setChapterSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [lastReadChapter, setLastReadChapter] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (novel?.slug) {
+      const prog = localStorage.getItem(`reading_progress_${novel.slug}`);
+      setLastReadChapter(prog);
+    }
+  }, [novel?.slug]);
+
+  const processedChapters = React.useMemo(() => {
+    let list = [...chapters];
+    if (list.length === 0 && novel?.chapter_count) {
+      list = Array.from({ length: novel.chapter_count }).map((_, idx) => ({
+        id: idx + 1,
+        chapter_number: idx + 1,
+        title: `Chương ${idx + 1}`,
+        published_at: novel.update_time
+      }));
+    }
+    if (chapterSortOrder === 'asc') {
+      list.sort((a, b) => a.chapter_number - b.chapter_number);
+    } else {
+      list.sort((a, b) => b.chapter_number - a.chapter_number);
+    }
+    if (chapterSearchQuery.trim()) {
+      const q = chapterSearchQuery.toLowerCase();
+      list = list.filter(chap => 
+        chap.title.toLowerCase().includes(q) || 
+        `Chương ${chap.chapter_number}`.toLowerCase().includes(q) ||
+        chap.chapter_number.toString() === q.trim()
+      );
+    }
+    return list;
+  }, [chapters, novel?.chapter_count, novel?.update_time, chapterSortOrder, chapterSearchQuery]);
+
+  // Load balance for purchasing locked chapters
+  useEffect(() => {
+    if (currentUser) {
+      CoinService.getBalance()
+        .then(data => {
+          if (data) setBalance(data.coin_balance);
+        })
+        .catch(err => console.error("Failed to load user balance:", err));
+    }
+  }, [currentUser]);
+
+  // Sync balance changes
+  useEffect(() => {
+    const handleBalanceUpdate = () => {
+      if (currentUser) {
+        CoinService.getBalance()
+          .then(data => {
+            if (data) setBalance(data.coin_balance);
+          })
+          .catch(() => {});
+      }
+    };
+    window.addEventListener('balance-updated', handleBalanceUpdate);
+    return () => window.removeEventListener('balance-updated', handleBalanceUpdate);
+  }, [currentUser]);
+
   const [followedNovels, setFollowedNovels] = useState<any[]>([]);
   const [showAllFollowed, setShowAllFollowed] = useState(false);
   const [activeSidebarTab, setActiveSidebarTab] = useState<'followed' | 'history'>('followed');
@@ -516,6 +584,7 @@ const DetailPage: React.FC = () => {
             chapter_count: data.total_chapters || data.chapters?.length || 0,
             word_count: 0,
             update_time: data.updated_at,
+            is_vip: data.is_vip || false,
           };
           setNovel(mapped);
           setChapters(data.chapters || []);
@@ -546,6 +615,114 @@ const DetailPage: React.FC = () => {
         });
     }
   }, [id]);
+
+  // Fetch story price info and unlocked chapters when novel is VIP and user is logged in
+  useEffect(() => {
+    if (novel?.is_vip && novel?.slug && currentUser) {
+      CoinService.getStoryPrice(novel.slug)
+        .then(setStoryPrice)
+        .catch(() => {});
+
+      CoinService.getUnlockedChapters(novel.slug)
+        .then(data => {
+          if (data) {
+            setUnlockedChapters(data.unlocked_chapters || []);
+            setFreeUpTo(data.free_up_to ?? 50);
+          }
+        })
+        .catch(err => console.error("Failed to load unlocked chapters:", err));
+    }
+  }, [novel?.is_vip, novel?.slug, currentUser]);
+
+  const isVIPMember = currentUser ? isUserVIP(currentUser.name) : false;
+
+  const handleLockedChapterClick = (chap: any) => {
+    if (!currentUser) {
+      import('@/lib/dialog').then(({ showToast }) => {
+        showToast("Vui lòng đăng nhập để mở khóa chương truyện!");
+      });
+      return;
+    }
+
+    const cost = 100;
+    if (balance >= cost) {
+      import('@/lib/dialog').then(({ showCustomConfirm, showToast }) => {
+        showCustomConfirm(
+          "Mở khóa chương truyện",
+          `Bạn có muốn dùng ${cost} xu để mở khóa vĩnh viễn "${chap.title || `Chương ${chap.chapter_number}`}" không?\n(Số dư hiện tại: ${balance.toLocaleString('vi-VN')} xu)`,
+          async () => {
+            try {
+              const res = await CoinService.unlockChapter(chap.id);
+              setBalance(res.coin_balance);
+              setUnlockedChapters(prev => [...prev, chap.chapter_number]);
+              showToast(`Mở khóa thành công "${chap.title || `Chương ${chap.chapter_number}`}"!`);
+              localStorage.setItem('user_balance', String(res.coin_balance));
+              window.dispatchEvent(new CustomEvent('balance-updated'));
+            } catch (err: any) {
+              console.error("Failed to unlock chapter:", err);
+              showToast(err.response?.data?.error || "Giao dịch mở khóa thất bại. Vui lòng thử lại!");
+            }
+          },
+          undefined,
+          "lock"
+        );
+      });
+    } else {
+      import('@/lib/dialog').then(({ showCustomConfirm }) => {
+        showCustomConfirm(
+          "Số dư không đủ",
+          `Bạn cần thêm ${cost - balance} xu để mở khóa chương này.\nBạn có muốn chuyển sang trang nạp xu không?`,
+          () => {
+            window.location.href = '/coins';
+          },
+          undefined,
+          "warning"
+        );
+      });
+    }
+  };
+
+  const handleBuyStory = async () => {
+    if (!novel?.slug || buyingStory) return;
+    if (!currentUser) {
+      import('@/lib/dialog').then(({ showToast }) => {
+        showToast('Vui lòng đăng nhập để mua truyện.');
+      });
+      return;
+    }
+    if (!storyPrice || storyPrice.locked_count === 0) return;
+
+    import('@/lib/dialog').then(({ showCustomConfirm, showToast }) => {
+      showCustomConfirm(
+        "Mua toàn bộ truyện",
+        `Mua toàn bộ ${storyPrice.locked_count} chapter còn lại với ${storyPrice.total_cost.toLocaleString('vi-VN')} xu?`,
+        async () => {
+          setBuyingStory(true);
+          try {
+            const result = await CoinService.buyStory(novel.slug);
+            showToast(`Đã mở khóa ${result.unlocked_count} chapter! Số dư còn: ${result.coin_balance.toLocaleString('vi-VN')} xu.`);
+            setBalance(result.coin_balance);
+            localStorage.setItem('user_balance', String(result.coin_balance));
+            window.dispatchEvent(new CustomEvent('balance-updated'));
+            
+            CoinService.getStoryPrice(novel.slug).then(setStoryPrice).catch(() => {});
+            CoinService.getUnlockedChapters(novel.slug)
+              .then(data => {
+                if (data) {
+                  setUnlockedChapters(data.unlocked_chapters || []);
+                  setFreeUpTo(data.free_up_to ?? 50);
+                }
+              })
+              .catch(() => {});
+          } catch (err: any) {
+            showToast(err?.response?.data?.error || 'Mua thất bại. Vui lòng thử lại.');
+          } finally {
+            setBuyingStory(false);
+          }
+        }
+      );
+    });
+  };
 
   if (loading) {
     return (
@@ -666,15 +843,30 @@ const DetailPage: React.FC = () => {
               className="w-full rounded-sm border border-outline-variant/50" 
               src={novel.cover || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover"} 
             />
-            <div className={`absolute top-2 left-2 ${novel.status === 'Hoàn thành' ? 'bg-blue-600' : 'bg-primary'} text-on-primary font-bold text-[10px] uppercase tracking-widest px-2 py-1 rounded-sm shadow-sm`}>
-              {novel.status}
+            <div className="absolute top-2 left-2 flex items-center gap-1.5 z-10">
+              <div className={`${novel.status === 'Hoàn thành' ? 'bg-blue-600/90' : 'bg-primary/90'} text-on-primary font-bold text-[10px] uppercase tracking-widest px-2.5 py-1 rounded-sm shadow-sm`}>
+                {novel.status}
+              </div>
+              {novel.is_vip && (
+                <div className="bg-[#ffaa00] text-neutral-950 font-bold text-[10px] uppercase tracking-widest px-2.5 py-1 rounded-sm shadow-sm flex items-center justify-center">
+                  <ViconicIcon name="u4:vip-crown-queen-1-bold" size={12} className="shrink-0" />
+                </div>
+              )}
             </div>
           </div>
         </div>
         
         {/* Novel Metadata */}
         <div className="md:w-2/3 lg:w-3/4 flex flex-col justify-center relative z-10">
-          <h1 className="font-display-lg text-2xl md:text-3xl text-on-surface mb-2 leading-tight tracking-tight">{novel.title}</h1>
+          <div className="flex items-center gap-3 flex-wrap mb-2">
+            <h1 className="font-display-lg text-2xl md:text-3xl text-on-surface leading-tight tracking-tight">{novel.title}</h1>
+            {novel.is_vip && (
+              <span className="bg-gradient-to-r from-amber-500 to-yellow-400 text-neutral-950 font-black text-[10px] uppercase tracking-wider px-2.5 py-1 rounded-sm shadow-sm flex items-center gap-1">
+                <ViconicIcon name="u4:vip-crown-queen-1-bold" size={12} className="shrink-0" />
+                TRUYỆN VIP
+              </span>
+            )}
+          </div>
           <p className="font-body-ui text-primary mb-4 flex items-center gap-1 font-bold">
             <ViconicIcon name="edit" size={14} className="shrink-0 text-primary" />
             {novel.author || "Đang cập nhật"}
@@ -738,25 +930,61 @@ const DetailPage: React.FC = () => {
             ))}
           </div>
           {/* Actions */}
-          <div className="flex flex-wrap gap-3">
-            <Link 
-              to={`/chapter/${novel.id}/1`}
-              className="bg-primary text-on-primary font-bold px-6 py-2.5 rounded-sm hover:bg-primary/90 transition-colors flex items-center gap-2"
-            >
-              <ViconicIcon name="menu_book" size={14} className="shrink-0" />
-              Đọc Ngay
-            </Link>
-            <button 
-              onClick={handleFollowToggle}
-              className={`font-bold px-6 py-2.5 rounded-sm transition-all duration-200 flex items-center gap-2 border active:scale-95 ${
-                isFollowed
-                  ? 'bg-primary text-on-primary border-primary hover:bg-primary/95 shadow-sm'
-                  : 'bg-surface border-outline-variant text-primary hover:bg-surface-variant'
-              }`}
-            >
-              <ViconicIcon name="favorite" size={14} className="shrink-0" />
-              {isFollowed ? 'Đã Theo Dõi' : 'Theo Dõi'}
-            </button>
+          <div className="flex flex-col gap-3.5 mt-2">
+            <div className="flex flex-wrap gap-3">
+              <Link 
+                to={`/chapter/${novel.id}/1`}
+                className="bg-primary text-on-primary font-bold text-xs px-5 py-2 rounded-sm hover:bg-primary/90 transition-colors flex items-center gap-1.5 active:scale-95 shadow-sm"
+              >
+                <ViconicIcon name="menu_book" size={13} className="shrink-0" />
+                Đọc Ngay
+              </Link>
+              <Link 
+                to={`/chapter/${novel.id}/${lastReadChapter || '1'}`}
+                className="bg-secondary text-on-secondary font-bold text-xs px-5 py-2 rounded-sm hover:bg-secondary/90 transition-colors flex items-center gap-1.5 active:scale-95 shadow-sm"
+              >
+                <ViconicIcon name="forward" size={13} className="shrink-0" />
+                <span>Đọc Tiếp {lastReadChapter ? `(C. ${lastReadChapter})` : ''}</span>
+              </Link>
+              <button 
+                onClick={handleFollowToggle}
+                className={`font-bold text-xs px-5 py-2 rounded-sm transition-all duration-200 flex items-center gap-1.5 border active:scale-95 ${
+                  isFollowed
+                    ? 'bg-primary text-on-primary border-primary hover:bg-primary/95 shadow-sm'
+                    : 'bg-surface border-outline-variant text-primary hover:bg-surface-variant'
+                }`}
+              >
+                <ViconicIcon name="favorite" size={13} className="shrink-0" />
+                {isFollowed ? 'Đã Theo Dõi' : 'Theo Dõi'}
+              </button>
+            </div>
+
+            {/* Buy Whole Story Container */}
+            {novel.is_vip && currentUser && storyPrice && storyPrice.locked_count > 0 && (
+              <div className="bg-amber-500/5 border border-amber-500/20 p-3 rounded-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 max-w-[500px]">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider flex items-center gap-1">
+                    <ViconicIcon name="u4:vip-crown-queen-1-bold" size={12} />
+                    Mở khóa trọn gói
+                  </span>
+                  <span className="text-[10px] text-on-surface-variant leading-relaxed">
+                    Còn {storyPrice.locked_count} chương chưa khóa. Mua toàn bộ để tiết kiệm và đọc ngay!
+                  </span>
+                </div>
+                <button
+                  onClick={handleBuyStory}
+                  disabled={buyingStory}
+                  className="bg-amber-500 hover:bg-amber-600 text-white font-black text-xs px-4 py-2 rounded-sm transition-all flex items-center justify-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-60 shrink-0"
+                >
+                  {buyingStory ? (
+                    <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <ViconicIcon name="shopping_bag" size={13} className="shrink-0" />
+                  )}
+                  Mua cả bộ · {storyPrice.total_cost.toLocaleString('vi-VN')} xu
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -788,7 +1016,7 @@ const DetailPage: React.FC = () => {
           {((novel.intro || "").replace(/\\n/g, '\n').split('\n').filter((p: string) => p.trim() !== '').length > 3) && (
             <button 
               onClick={() => setIsDescExpanded(!isDescExpanded)}
-              className="mt-4 font-bold text-sm text-primary hover:underline flex items-center gap-1"
+              className="mt-4 font-bold text-xs text-primary hover:underline flex items-center gap-1"
             >
               {isDescExpanded ? "Thu gọn" : "Xem thêm"}
               <ViconicIcon name={isDescExpanded ? "keyboard_arrow_up" : "keyboard_arrow_down"} size={14} className="shrink-0" />
@@ -797,40 +1025,60 @@ const DetailPage: React.FC = () => {
         </section>
 
         {/* Chapter List */}
-        <section className="bg-surface border border-outline-variant/50 p-6 rounded-sm shadow-sm">
-          <div className="flex justify-between items-center mb-4 border-b border-outline-variant/50 pb-3">
+        <section className="bg-surface border border-outline-variant/50 p-6 rounded-sm shadow-sm flex flex-col gap-4">
+          <div className="flex justify-between items-center border-b border-outline-variant/50 pb-3">
             <h2 className="font-display-lg text-lg md:text-xl text-on-surface flex items-center gap-2">
               <ViconicIcon name="format_list_bulleted" size={24} className="text-primary shrink-0" />
               Danh sách chương
             </h2>
-            <span className="font-bold text-[10px] sm:text-xs text-on-surface-variant bg-surface-variant px-2 py-1 rounded-sm shrink-0">
-              {chapters.length > 0 ? chapters.length : novel.chapter_count || 0} Chương
-            </span>
-          </div>
-          <div className="space-y-1">
-            {[...chapters].reverse().slice(0, showAllChapters ? chapters.length : 10).map((chap: any) => (
-              <ChapterItem 
-                key={chap.id || chap.chapter_number} 
-                id={`${novel.id}/${chap.chapter_number}`} 
-                title={chap.title} 
-                date={chap.published_at ? new Date(chap.published_at).toLocaleDateString('vi-VN') : "Mới đây"} 
-              />
-            ))}
-            {chapters.length === 0 && Array.from({ length: Math.min(novel.chapter_count || 3, 5) }).map((_, idx) => (
-              <ChapterItem 
-                key={idx} 
-                id={`${novel.id}/${idx + 1}`} 
-                title={`Chương ${idx + 1}`} 
-                date={novel.update_time ? new Date(novel.update_time).toLocaleDateString('vi-VN') : "Mới đây"} 
-              />
-            ))}
-            {chapters.length > 10 && (
-              <button 
-                onClick={() => setShowAllChapters(!showAllChapters)}
-                className="w-full mt-4 py-2.5 text-center font-bold text-sm text-primary hover:bg-primary/5 rounded-sm border border-dashed border-outline-variant transition-colors"
+            
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setChapterSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                className="w-8 h-8 flex items-center justify-center border border-outline-variant hover:bg-surface-variant/20 rounded-sm text-on-surface-variant transition-colors"
+                title={chapterSortOrder === 'asc' ? 'Sắp xếp: Cũ nhất trước. Click để đảo chiều' : 'Sắp xếp: Mới nhất trước. Click để đảo chiều'}
               >
-                {showAllChapters ? "Thu gọn danh sách" : "Xem thêm các chương khác"}
+                <ViconicIcon name={chapterSortOrder === 'asc' ? 'arrow_downward' : 'arrow_upward'} size={15} className="shrink-0" />
               </button>
+
+              <span className="font-bold text-[10px] sm:text-xs text-on-surface-variant bg-surface-variant px-2.5 py-1.5 rounded-sm">
+                {chapters.length > 0 ? chapters.length : novel.chapter_count || 0} Chương
+              </span>
+            </div>
+          </div>
+
+          <div className="relative">
+            <ViconicIcon name="search" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/65 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Tìm nhanh số chương (ví dụ: '10', 'Chương 50')..."
+              value={chapterSearchQuery}
+              onChange={(e) => setChapterSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-4 py-2.5 rounded-sm border border-outline-variant/60 bg-surface text-on-surface text-xs focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all font-medium"
+            />
+          </div>
+
+          <div className="max-h-[420px] overflow-y-auto pr-1 space-y-1.5 no-scrollbar">
+            {processedChapters.length > 0 ? (
+              processedChapters.map((chap: any) => {
+                const chapterIndex = chap.chapter_number;
+                const isLocked = novel?.is_vip && chapterIndex > freeUpTo && !isVIPMember && !unlockedChapters.includes(chapterIndex);
+
+                return (
+                  <ChapterItem 
+                    key={chap.id || chap.chapter_number} 
+                    id={`${novel.id}/${chap.chapter_number}`} 
+                    title={chap.title} 
+                    date={chap.published_at ? new Date(chap.published_at).toLocaleDateString('vi-VN') : "Mới đây"}
+                    isLocked={isLocked}
+                    onLockedClick={() => handleLockedChapterClick(chap)}
+                  />
+                );
+              })
+            ) : (
+              <div className="text-center py-10 text-on-surface-variant/80 font-medium text-xs border border-dashed border-outline-variant/40 rounded-sm">
+                Không tìm thấy chương nào phù hợp với bộ lọc tìm kiếm.
+              </div>
             )}
           </div>
         </section>
@@ -874,7 +1122,7 @@ const DetailPage: React.FC = () => {
                   <button 
                     onClick={() => {
                       const mockUser = {
-                        name: "Độc Giả Yume",
+                        name: "Độc Giả Pub Nih",
                         avatar: "https://lh3.googleusercontent.com/aida-public/AB6AXuAb-14uOcA3z6oOYNNXFQZMGk5LqtQxM2cL7kShQ6UO4TvOht8YiLfBJY-3bihJuLgXze9CkbXBa6QFIw9VqTUHkpB50TncEOMChL_WpiVyFICNRCgDJc9ARVe1kNnxXUnO8MK2up2wRutKKiFBjnuceM8exGI8iRAvDvvXidxorqEi32E5PB2o9k-EKsrzj1ffNHQkPDA5LxhyYhJbSWfwvAlEKTTvNwgrsUxFkPJ1FnXVSIeWsLB4K3mNSVpSarNi49k0D31ynmtw"
                       };
                       localStorage.setItem('user', JSON.stringify(mockUser));
@@ -1083,7 +1331,7 @@ const DetailPage: React.FC = () => {
           <button 
             onClick={() => {
               const mockUser = {
-                name: "Độc Giả Yume",
+                name: "Độc Giả Pub Nih",
                 avatar: "https://lh3.googleusercontent.com/aida-public/AB6AXuAb-14uOcA3z6oOYNNXFQZMGk5LqtQxM2cL7kShQ6UO4TvOht8YiLfBJY-3bihJuLgXze9CkbXBa6QFIw9VqTUHkpB50TncEOMChL_WpiVyFICNRCgDJc9ARVe1kNnxXUnO8MK2up2wRutKKiFBjnuceM8exGI8iRAvDvvXidxorqEi32E5PB2o9k-EKsrzj1ffNHQkPDA5LxhyYhJbSWfwvAlEKTTvNwgrsUxFkPJ1FnXVSIeWsLB4K3mNSVpSarNi49k0D31ynmtw"
               };
               localStorage.setItem('user', JSON.stringify(mockUser));
@@ -1099,7 +1347,13 @@ const DetailPage: React.FC = () => {
         </div>
       ) : (
         <form onSubmit={handleAddComment} className="mb-6 flex gap-3">
-          <img alt="Your avatar" className="w-10 h-10 rounded-sm shrink-0 object-cover border border-outline-variant/50" src={currentUser.avatar} />
+          {currentUser && isUserVIP(currentUser.name) ? (
+            <div className="w-10 h-10 rounded-sm shrink-0 vip-avatar-rainbow">
+              <img alt="Your avatar" className="w-full h-full rounded-sm object-cover bg-white" src={currentUser.avatar} />
+            </div>
+          ) : (
+            <img alt="Your avatar" className="w-10 h-10 rounded-sm shrink-0 object-cover border border-outline-variant/50" src={currentUser.avatar} />
+          )}
           <div className="flex-grow flex flex-col gap-2">
             <style>{`
               .rich-editor:empty:before {
@@ -1190,12 +1444,27 @@ const DetailPage: React.FC = () => {
             className="flex gap-3 p-3 rounded-sm bg-surface hover:bg-surface-variant/20 transition-colors border border-outline-variant/50"
           >
             <div className="relative shrink-0">
-              <img alt={comment.user} className="w-10 h-10 rounded-sm object-cover border border-outline-variant/50" src={comment.avatar} />
+              {isUserVIP(comment.user) ? (
+                <div className="w-10 h-10 rounded-sm vip-avatar-rainbow">
+                  <img alt={comment.user} className="w-full h-full rounded-sm object-cover bg-white" src={comment.avatar} />
+                </div>
+              ) : (
+                <img alt={comment.user} className="w-10 h-10 rounded-sm object-cover border border-outline-variant/50" src={comment.avatar} />
+              )}
             </div>
             <div className="flex-grow min-w-0">
               <div className="flex items-center justify-between gap-2">
-                <div className="flex items-baseline gap-2 truncate">
-                  <span className="font-label-bold text-on-surface text-xs truncate">{comment.user}</span>
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className={`font-label-bold text-xs truncate ${isUserVIP(comment.user) ? 'text-primary font-black' : 'text-on-surface'}`}>
+                    {comment.user}
+                  </span>
+                  {isUserVIP(comment.user) && (
+                    <span className="vip-badge-rainbow select-none shrink-0">
+                      <span className="vip-badge-rainbow-inner">
+                        <span className="vip-text-rainbow text-[7px] font-black uppercase">VIP</span>
+                      </span>
+                    </span>
+                  )}
                   <span className="text-[9px] text-on-surface-variant font-bold uppercase tracking-widest opacity-80 shrink-0">{comment.time}</span>
                 </div>
                 <button className="text-outline hover:text-primary transition-colors flex items-center justify-center shrink-0">
@@ -1235,10 +1504,25 @@ const DetailPage: React.FC = () => {
                 <div className="mt-3.5 space-y-3.5 pl-4 border-l-2 border-outline-variant/30 animate-in fade-in duration-300">
                   {comment.replies.map((reply) => (
                     <div key={reply.id} className="flex gap-2.5 bg-surface-variant/20 p-2.5 rounded-sm border border-outline-variant/20">
-                      <img alt={reply.user} className="w-8 h-8 rounded-sm object-cover border border-outline-variant/50 shrink-0" src={reply.avatar} />
+                      {isUserVIP(reply.user) ? (
+                        <div className="w-8 h-8 rounded-sm vip-avatar-rainbow shrink-0">
+                          <img alt={reply.user} className="w-full h-full rounded-sm object-cover bg-white" src={reply.avatar} />
+                        </div>
+                      ) : (
+                        <img alt={reply.user} className="w-8 h-8 rounded-sm object-cover border border-outline-variant/50 shrink-0" src={reply.avatar} />
+                      )}
                       <div className="flex-grow min-w-0">
-                        <div className="flex items-baseline gap-2 truncate">
-                          <span className="font-label-bold text-on-surface text-[11px] truncate">{reply.user}</span>
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span className={`font-label-bold text-[11px] truncate ${isUserVIP(reply.user) ? 'text-primary font-black' : 'text-on-surface'}`}>
+                            {reply.user}
+                          </span>
+                          {isUserVIP(reply.user) && (
+                            <span className="vip-badge-rainbow select-none shrink-0">
+                              <span className="vip-badge-rainbow-inner">
+                                <span className="vip-text-rainbow text-[7px] font-black uppercase">VIP</span>
+                              </span>
+                            </span>
+                          )}
                           <span className="text-[8px] text-on-surface-variant font-bold uppercase tracking-widest opacity-80 shrink-0">{reply.time}</span>
                         </div>
                         <p 
@@ -1254,7 +1538,13 @@ const DetailPage: React.FC = () => {
               {/* Reply Form */}
               {replyingToId === comment.id && (
                 <form onSubmit={(e) => handleAddReply(comment.id, e)} className="mt-3 bg-surface-variant/10 p-3 rounded-sm border border-dashed border-outline-variant/60 flex gap-3 animate-in slide-in-from-top-2 duration-200">
-                  <img alt="Your avatar" className="w-8 h-8 rounded-sm shrink-0 object-cover border border-outline-variant/50" src={currentUser ? currentUser.avatar : "https://lh3.googleusercontent.com/aida-public/AB6AXuD1epYzUm9PYg5Z4v3zZXDsv3Ph06NlgpommDOBvTTqpLS3sgVhIeXPPp9WnpwOkdoqtjcPa7sGjgQfoBHy1XdCxXIKD7tqus0SdH1HPjLIKxGI69O0lGijT1mmXVujCcTxU8e4qviArMpb35YAx9YX9MqEvEk89DXG1XvQL29j24ny5Zf8gpuufV0HirEieDmpzG4wzbSixeeYFb8Jzm5F7Pj_zz0pQAd7bOyes99b2icDY6xwJomVgVwm7mLtPK9U6SCF3BpQUm0w"} />
+                  {currentUser && isUserVIP(currentUser.name) ? (
+                    <div className="w-8 h-8 rounded-sm vip-avatar-rainbow shrink-0">
+                      <img alt="Your avatar" className="w-full h-full rounded-sm object-cover bg-white" src={currentUser.avatar} />
+                    </div>
+                  ) : (
+                    <img alt="Your avatar" className="w-8 h-8 rounded-sm shrink-0 object-cover border border-outline-variant/50" src={currentUser ? currentUser.avatar : "https://lh3.googleusercontent.com/aida-public/AB6AXuD1epYzUm9PYg5Z4v3zZXDsv3Ph06NlgpommDOBvTTqpLS3sgVhIeXPPp9WnpwOkdoqtjcPa7sGjgQfoBHy1XdCxXIKD7tqus0SdH1HPjLIKxGI69O0lGijT1mmXVujCcTxU8e4qviArMpb35YAx9YX9MqEvEk89DXG1XvQL29j24ny5Zf8gpuufV0HirEieDmpzG4wzbSixeeYFb8Jzm5F7Pj_zz0pQAd7bOyes99b2icDY6xwJomVgVwm7mLtPK9U6SCF3BpQUm0w"} />
+                  )}
                   <div className="flex-grow flex flex-col gap-2">
                     <div 
                       ref={replyEditorRef}

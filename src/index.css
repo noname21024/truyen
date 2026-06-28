@@ -96,3 +96,87 @@
     left: calc((100vw - 1300px) / 2 + 32px) !important;
   }
 }
+
+/* Custom Global Scrollbar */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(120, 85, 94, 0.35);
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(120, 85, 94, 0.75);
+}
+
+/* Firefox compatibility */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 85, 94, 0.35) transparent;
+}
+
+/* VIP Text Solid Gold */
+.vip-text-rainbow {
+  color: #ffaa00;
+  font-weight: 900;
+  line-height: 1;
+}
+
+/* VIP Status Pill Badge */
+.vip-avatar-rainbow {
+  position: relative;
+  padding: 2px;
+  background: linear-gradient(45deg, #ff455b, #ffaa00, #00e676, #00b0ff, #d500f9);
+  background-size: 250% 250%;
+  animation: rainbow-flow 4s linear infinite;
+}
+
+@keyframes rainbow-flow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* VIP Badge Rainbow Border & Text */
+.vip-badge-rainbow {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px;
+  background: linear-gradient(45deg, #ff455b, #ffaa00, #00e676, #00b0ff, #d500f9);
+  background-size: 250% 250%;
+  animation: rainbow-flow 4s linear infinite;
+  border-radius: 4px;
+}
+
+.vip-badge-rainbow-inner {
+  background: #18181b; /* zinc-900 */
+  border-radius: 3px;
+  padding: 1px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dark .vip-badge-rainbow-inner {
+  background: #09090b; /* zinc-950 */
+}
+
+
+.vip-pill-rainbow {
+  background: linear-gradient(45deg, #ff455b, #ffaa00, #00e676, #00b0ff, #d500f9);
+  background-size: 250% 250%;
+  animation: rainbow-flow 4s linear infinite;
+  color: white;
+  font-weight: 800;
+}

@@ -17,6 +17,7 @@ interface RankedNovel {
   displayViews: number;
   status?: string;
   totalChapters: number;
+  is_vip?: boolean;
 }
 
 const RankingPage: React.FC = () => {
@@ -56,7 +57,8 @@ const RankingPage: React.FC = () => {
             viewCount: novel.view_count || 0,
             status: novel.status,
             totalChapters: novel.total_chapters || 0,
-            factors: { dayFactor, weekFactor, monthFactor }
+            factors: { dayFactor, weekFactor, monthFactor },
+            is_vip: novel.is_vip
           };
         });
 
@@ -148,7 +150,8 @@ const RankingPage: React.FC = () => {
               viewCount: baseViews,
               status: mockStatus[i],
               totalChapters: 200 + i * 45,
-              factors: { dayFactor, weekFactor, monthFactor }
+              factors: { dayFactor, weekFactor, monthFactor },
+              is_vip: i % 3 === 0
             });
           }
         }
@@ -175,7 +178,8 @@ const RankingPage: React.FC = () => {
             viewCount: n.viewCount,
             displayViews,
             status: n.status,
-            totalChapters: n.totalChapters
+            totalChapters: n.totalChapters,
+            is_vip: n.is_vip
           };
         });
 
@@ -229,7 +233,7 @@ const RankingPage: React.FC = () => {
             <span>Bảng Xếp Hạng Truyện</span>
           </h1>
           <p className="font-body-ui text-on-surface-variant text-xs sm:text-sm max-w-2xl opacity-90 leading-relaxed">
-            Khám phá những tác phẩm ăn khách, được đón đọc nhiều nhất trên YumeNovels. Cập nhật liên tục dựa trên số lượt xem thực tế theo ngày, tuần, tháng.
+            Khám phá những tác phẩm ăn khách, được đón đọc nhiều nhất trên Pub Nih Truyện. Cập nhật liên tục dựa trên số lượt xem thực tế theo ngày, tuần, tháng.
           </p>
         </div>
       </div>
@@ -382,29 +386,19 @@ const RankingPage: React.FC = () => {
                     )}
 
                     {novel.status && (
-                      <span className={`px-1.5 py-0.5 sm:px-2 sm:py-0.5 rounded-md border select-none ${
-                        novel.status === 'COMPLETED' 
-                          ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' 
-                          : novel.status === 'ONGOING'
-                          ? 'bg-sky-500/10 text-sky-600 border-sky-500/20'
-                          : 'bg-slate-500/10 text-slate-600 border-slate-500/20'
+                      <span className={`px-1.5 py-0.5 sm:px-2 sm:py-0.5 rounded-sm border select-none ${
+                        (novel.status === 'COMPLETED' || novel.status === 'Hoàn thành')
+                          ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' 
+                          : 'bg-primary/10 text-primary border-primary/20'
                       }`}>
-                        {novel.status === 'COMPLETED' ? (
-                          <>
-                            <ViconicIcon name="check" size={11} className="shrink-0 sm:hidden inline" />
-                            <span className="hidden sm:inline">Hoàn thành</span>
-                          </>
-                        ) : novel.status === 'ONGOING' ? (
-                          <>
-                            <ViconicIcon name="sync" size={11} className="shrink-0 sm:hidden inline" />
-                            <span className="hidden sm:inline">Đang ra</span>
-                          </>
-                        ) : (
-                          <>
-                            <ViconicIcon name="pause" size={11} className="shrink-0 sm:hidden inline" />
-                            <span className="hidden sm:inline">Tạm ngưng</span>
-                          </>
-                        )}
+                        {(novel.status === 'COMPLETED' || novel.status === 'Hoàn thành') ? 'Hoàn thành' : 'Đang ra'}
+                      </span>
+                    )}
+
+                    {novel.is_vip && (
+                      <span className="bg-[#ffaa00]/10 text-[#ffaa00] border border-[#ffaa00]/20 px-1.5 py-0.5 sm:px-2 sm:py-0.5 rounded-sm font-bold flex items-center gap-0.5 uppercase tracking-wider select-none">
+                        <ViconicIcon name="u4:vip-crown-queen-1-bold" size={9} className="shrink-0" />
+                        <span>VIP</span>
                       </span>
                     )}
                     

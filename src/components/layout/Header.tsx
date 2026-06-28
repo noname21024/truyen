@@ -2,7 +2,9 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import novelsDataJson from '@/data/novelsIndex.json';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { CategoryService, NovelService } from '@/lib/api';
+import { CategoryService, NovelService, CoinService } from '@/lib/api';
+import { showCustomAlert, showCustomConfirm } from '@/lib/dialog';
+import { isUserVIP } from '@/lib/user';
 import {
   Dialog,
   DialogContent,
@@ -31,38 +33,45 @@ const Header: React.FC = () => {
     if (saved) {
       try { setUser(JSON.parse(saved)); } catch (e) {}
     }
+    const openLogin = () => setIsLoginDialogOpen(true);
+    window.addEventListener('open-login-dialog', openLogin);
+    return () => window.removeEventListener('open-login-dialog', openLogin);
   }, []);
 
-  const loginWithGoogle = () => {
+  // Sync user VIP status and balance with backend on mount
+  useEffect(() => {
+    if (!user) return;
+    CoinService.getBalance()
+      .then(data => {
+        try {
+          const saved = localStorage.getItem('user');
+          if (saved) {
+            const u = JSON.parse(saved);
+            if (u.coin_balance !== data.coin_balance || u.is_vip !== data.is_vip) {
+              const updated = { ...u, coin_balance: data.coin_balance, is_vip: data.is_vip };
+              localStorage.setItem('user', JSON.stringify(updated));
+              setUser(updated);
+            }
+          }
+        } catch {}
+      })
+      .catch(() => {});
+  }, [user?.id]);
+
+  const loginWithGoogle = async () => {
     setIsSubmitting(true);
-    setTimeout(() => {
-      const mockUser = {
-        name: "Độc Giả Yume (Google)",
-        avatar: "https://lh3.googleusercontent.com/aida-public/AB6AXuAb-14uOcA3z6oOYNNXFQZMGk5LqtQxM2cL7kShQ6UO4TvOht8YiLfBJY-3bihJuLgXze9CkbXBa6QFIw9VqTUHkpB50TncEOMChL_WpiVyFICNRCgDJc9ARVe1kNnxXUnO8MK2up2wRutKKiFBjnuceM8exGI8iRAvDvvXidxorqEi32E5PB2o9k-EKsrzj1ffNHQkPDA5LxhyYhJbSWfwvAlEKTTvNwgrsUxFkPJ1FnXVSIeWsLB4K3mNSVpSarNi49k0D31ynmtw"
-      };
-      localStorage.setItem('user', JSON.stringify(mockUser));
-      setUser(mockUser);
+    try {
+      const resp = await fetch('http://localhost:8000/api/auth/google/');
+      const data = await resp.json();
+      window.location.href = data.auth_url;
+    } catch {
       setIsSubmitting(false);
-      setIsLoginDialogOpen(false);
-      alert("Đăng nhập thành công bằng tài khoản Google!");
-      window.location.reload();
-    }, 800);
+      alert('Không thể kết nối tới server. Vui lòng thử lại.');
+    }
   };
 
   const loginWithFacebook = () => {
-    setIsSubmitting(true);
-    setTimeout(() => {
-      const mockUser = {
-        name: "Độc Giả Yume (Facebook)",
-        avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80"
-      };
-      localStorage.setItem('user', JSON.stringify(mockUser));
-      setUser(mockUser);
-      setIsSubmitting(false);
-      setIsLoginDialogOpen(false);
-      alert("Đăng nhập thành công bằng tài khoản Facebook!");
-      window.location.reload();
-    }, 800);
+    alert('Đăng nhập bằng Facebook chưa được hỗ trợ.');
   };
 
   // Extract unique genres from data as fallback
@@ -187,8 +196,8 @@ const Header: React.FC = () => {
           className="text-lg sm:text-xl md:text-2xl font-bold text-primary italic font-headline-md tracking-tight flex items-center gap-2 truncate min-w-0" 
           to="/"
         >
-          <img src="/logo.svg" alt="YumeNovels Logo" className="w-9 h-9 object-contain shrink-0" />
-          <span className="truncate">YumeNovels</span>
+          <img src="/logo.svg" alt="Pub Nih Truyện Logo" className="w-9 h-9 object-contain shrink-0" />
+          <span className="truncate">Pub Nih Truyện</span>
         </Link>
 
         {/* Navigation Links */}
@@ -307,11 +316,21 @@ const Header: React.FC = () => {
                 className="flex items-center gap-1 focus:outline-none hover:scale-105 active:scale-95 transition-transform"
                 aria-expanded={isUserDropdownOpen}
               >
-                <img 
-                  src={user.avatar} 
-                  alt={user.name} 
-                  className="w-9 h-9 rounded-full border border-primary/30 object-cover shadow-sm" 
-                />
+                {isUserVIP(user.name) ? (
+                  <div className="w-9 h-9 rounded-full vip-avatar-rainbow p-[2px]">
+                    <img 
+                      src={user.avatar} 
+                      alt={user.name} 
+                      className="w-full h-full rounded-full border border-primary/30 object-cover bg-white" 
+                    />
+                  </div>
+                ) : (
+                  <img 
+                    src={user.avatar} 
+                    alt={user.name} 
+                    className="w-9 h-9 rounded-full border border-primary/30 object-cover shadow-sm" 
+                  />
+                )}
                 <ViconicIcon name="arrow_drop_down" size={16} className="text-on-surface-variant shrink-0" />
               </button>
 
@@ -319,33 +338,76 @@ const Header: React.FC = () => {
                 <div className="absolute right-0 mt-2.5 w-52 bg-white border border-outline-variant/50 rounded-sm shadow-xl z-50 py-1.5 animate-in fade-in slide-in-from-top-2 duration-150">
                   {/* Dropdown Header */}
                   <div className="px-4 py-2 border-b border-outline-variant/30 flex flex-col min-w-0">
-                    <span className="font-bold text-xs text-on-surface truncate">{user.name}</span>
-                    <span className="text-[10px] text-on-surface-variant font-medium mt-0.5">Độc giả</span>
+                    <span className="font-bold text-xs text-on-surface truncate flex items-center gap-1.5">
+                      <span>{user.name}</span>
+                      {isUserVIP(user.name) && (
+                        <span className="vip-badge-rainbow select-none shrink-0">
+                          <span className="vip-badge-rainbow-inner">
+                            <span className="vip-text-rainbow text-[7px] font-black uppercase">VIP</span>
+                          </span>
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-[10px] text-on-surface-variant font-medium mt-0.5">
+                      {isUserVIP(user.name) ? 'Hội Viên VIP' : 'Độc giả'}
+                    </span>
                   </div>
 
+                  {/* Coin balance */}
+                  <Link
+                    to="/coins"
+                    className="flex items-center justify-between gap-2 px-4 py-2 hover:bg-primary/5 hover:text-primary text-xs font-semibold text-on-surface-variant transition-colors border-b border-outline-variant/20"
+                  >
+                    <div className="flex items-center gap-2">
+                      <ViconicIcon name="toll" size={14} className="shrink-0 text-primary" />
+                      <span>Ví xu</span>
+                    </div>
+                    <span className="font-black text-primary">
+                      {(user?.coin_balance ?? 0).toLocaleString('vi-VN')} xu
+                    </span>
+                  </Link>
+
                   {/* Dropdown Options */}
-                  <Link 
-                    to="/profile" 
+                  <Link
+                    to="/profile"
                     className="flex items-center gap-2 px-4 py-2 hover:bg-primary/5 hover:text-primary text-xs font-semibold text-on-surface-variant transition-colors"
                   >
                     <ViconicIcon name="person" size={14} className="shrink-0" />
                     <span>Trang cá nhân</span>
                   </Link>
 
-                  <Link 
-                    to="/profile" 
+                  <Link
+                    to="/profile"
                     className="flex items-center gap-2 px-4 py-2 hover:bg-primary/5 hover:text-primary text-xs font-semibold text-on-surface-variant transition-colors"
                   >
                     <ViconicIcon name="auto_stories" size={14} className="shrink-0" />
                     <span>Tủ sách theo dõi</span>
                   </Link>
 
-                  <button 
+                  <Link
+                    to="/coins"
+                    className="flex items-center gap-2 px-4 py-2 hover:bg-primary/5 hover:text-primary text-xs font-semibold text-on-surface-variant transition-colors"
+                  >
+                    <ViconicIcon name="add_circle" size={14} className="shrink-0" />
+                    <span>Nạp xu</span>
+                  </Link>
+
+                  <button
                     onClick={() => {
-                      localStorage.removeItem('user');
-                      setUser(null);
-                      alert("Đã đăng xuất tài khoản!");
-                      window.location.reload();
+                      showCustomConfirm(
+                        'Đăng xuất',
+                        'Bạn có chắc chắn muốn đăng xuất tài khoản hiện tại không?',
+                        () => {
+                          localStorage.removeItem('user');
+                          localStorage.removeItem('auth_token');
+                          setUser(null);
+                          showCustomAlert('Thành công', 'Đã đăng xuất tài khoản!', () => {
+                            window.location.reload();
+                          });
+                        },
+                        undefined,
+                        'hum:logout'
+                      );
                     }}
                     className="w-full flex items-center gap-2 px-4 py-2 hover:bg-red-50 hover:text-red-600 text-xs font-semibold text-on-surface-variant border-t border-outline-variant/30 transition-colors text-left"
                   >
@@ -441,15 +503,39 @@ const Header: React.FC = () => {
             <div className="pt-2 pb-6">
               {user ? (
                 <div className="flex flex-col items-center gap-3 bg-surface-variant/20 p-4 rounded-sm border border-outline-variant/30 w-full">
-                  <img src={user.avatar} alt={user.name} className="w-12 h-12 rounded-full border border-primary/30 object-cover" />
-                  <span className="font-bold text-sm text-on-surface">{user.name}</span>
+                  {isUserVIP(user.name) ? (
+                    <div className="w-12 h-12 rounded-full vip-avatar-rainbow p-[3px] shrink-0">
+                      <img src={user.avatar} alt={user.name} className="w-full h-full rounded-full border border-primary/30 object-cover bg-white" />
+                    </div>
+                  ) : (
+                    <img src={user.avatar} alt={user.name} className="w-12 h-12 rounded-full border border-primary/30 object-cover shrink-0" />
+                  )}
+                  <span className="font-bold text-sm text-on-surface flex items-center gap-1.5 justify-center">
+                    <span>{user.name}</span>
+                    {isUserVIP(user.name) && (
+                      <span className="vip-badge-rainbow select-none shrink-0">
+                        <span className="vip-badge-rainbow-inner">
+                          <span className="vip-text-rainbow text-[8px] font-black uppercase">VIP</span>
+                        </span>
+                      </span>
+                    )}
+                  </span>
                   <button 
                     className="w-full bg-outline-variant/30 text-on-surface-variant font-label-bold text-xs py-2 px-6 rounded-sm hover:bg-outline-variant/50 transition-all flex items-center justify-center gap-2"
                     onClick={() => {
-                      localStorage.removeItem('user');
-                      setUser(null);
-                      alert("Đã đăng xuất tài khoản!");
-                      window.location.reload();
+                      showCustomConfirm(
+                        'Đăng xuất',
+                        'Bạn có chắc chắn muốn đăng xuất tài khoản hiện tại không?',
+                        () => {
+                          localStorage.removeItem('user');
+                          setUser(null);
+                          showCustomAlert('Thành công', 'Đã đăng xuất tài khoản!', () => {
+                            window.location.reload();
+                          });
+                        },
+                        undefined,
+                        'hum:logout'
+                      );
                     }}
                   >
                     <ViconicIcon name="logout" size={16} className="shrink-0" />
@@ -478,7 +564,7 @@ const Header: React.FC = () => {
               <ViconicIcon name="star_shine" size={24} />
             </div>
             <DialogTitle className="text-xl font-bold font-headline-md text-primary tracking-tight">
-              Đăng nhập YumeNovels
+              Đăng nhập Pub Nih Truyện
             </DialogTitle>
             <DialogDescription className="text-xs text-on-surface-variant font-body-ui">
               Chọn phương thức đăng nhập bằng Google hoặc Facebook để bắt đầu.

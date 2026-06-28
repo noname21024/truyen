@@ -181,6 +181,7 @@ const HomePage: React.FC = () => {
             chapter_count: dbNovel.total_chapters || 0,
             update_time: dbNovel.updated_at,
             view_count: dbNovel.view_count || 0,
+            is_vip: dbNovel.is_vip,
           }));
           setNovels(mapped);
         } else {
@@ -203,7 +204,8 @@ const HomePage: React.FC = () => {
     status: novel.status,
     color: novel.status === 'Hoàn thành' ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-green-100 text-green-700 border-green-200',
     img: novel.cover || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
-    views: novel.view_count || 0
+    views: novel.view_count || 0,
+    is_vip: novel.is_vip
   }));
 
   // Dynamic completed novels mapped from real data
@@ -214,7 +216,8 @@ const HomePage: React.FC = () => {
     status: novel.status,
     color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
     img: novel.cover || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
-    views: novel.view_count || 0
+    views: novel.view_count || 0,
+    is_vip: novel.is_vip
   }));
 
   // Map novels from novelsData for hot section
@@ -473,6 +476,7 @@ const HomePage: React.FC = () => {
                 statusColor={novel.color} 
                 image={novel.img}
                 views={novel.views}
+                isVip={novel.is_vip}
               />
             ))}
           </div>
@@ -484,7 +488,7 @@ const HomePage: React.FC = () => {
             <div className="flex justify-between items-end mb-6 border-b border-outline-variant/50 pb-4">
               <div>
                 <h2 className="font-display-lg text-lg sm:text-xl md:text-2xl text-on-surface flex items-center gap-2 truncate">
-                  <ViconicIcon name="check_circle" size={24} className="text-emerald-500 shrink-0" />
+                  <ViconicIcon name="check_circle" size={24} className="text-primary shrink-0" />
                   Truyện Đã Hoàn Thành
                 </h2>
               </div>
@@ -503,6 +507,7 @@ const HomePage: React.FC = () => {
                   statusColor={novel.color} 
                   image={novel.img}
                   views={novel.views}
+                  isVip={novel.is_vip}
                 />
               ))}
             </div>

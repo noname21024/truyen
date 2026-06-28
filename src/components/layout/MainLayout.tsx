@@ -13,6 +13,59 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   const location = useLocation();
   const isChapterPage = location.pathname.startsWith('/chapter/');
   const [showBackToTop, setShowBackToTop] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const [dialog, setDialog] = useState<{
+    isOpen: boolean;
+    type: 'alert' | 'confirm';
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    icon?: string;
+    onConfirm?: () => void;
+    onCancel?: () => void;
+  } | null>(null);
+
+  // Global custom toast listener
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const handleShowToast = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      setToastMessage(customEvent.detail.message);
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        setToastMessage(null);
+      }, 3000);
+    };
+    window.addEventListener('show-custom-toast', handleShowToast);
+    return () => {
+      window.removeEventListener('show-custom-toast', handleShowToast);
+      clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleShowDialog = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      setDialog({
+        isOpen: true,
+        ...customEvent.detail
+      });
+    };
+    window.addEventListener('show-custom-dialog', handleShowDialog);
+    return () => window.removeEventListener('show-custom-dialog', handleShowDialog);
+  }, []);
+
+  const handleConfirmDialog = () => {
+    if (dialog?.onConfirm) dialog.onConfirm();
+    setDialog(null);
+  };
+
+  const handleCancelDialog = () => {
+    if (dialog?.onCancel) dialog.onCancel();
+    setDialog(null);
+  };
 
   // Reset hovered novel when switching pages/routes
   useEffect(() => {
@@ -166,13 +219,17 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
               <div className="flex items-center gap-1.5 mt-1.5 text-[9px] font-bold">
                 {hoveredNovel.status && (
                   <span className={`px-1.5 py-0.5 rounded border ${
-                    hoveredNovel.status === 'COMPLETED' 
-                      ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' 
-                      : hoveredNovel.status === 'ONGOING'
-                      ? 'bg-sky-500/10 text-sky-600 border-sky-500/20'
-                      : 'bg-slate-500/10 text-slate-600 border-slate-500/20'
+                    (hoveredNovel.status === 'COMPLETED' || hoveredNovel.status === 'Hoàn thành')
+                      ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' 
+                      : 'bg-primary/10 text-primary border-primary/20'
                   }`}>
-                    {hoveredNovel.status === 'COMPLETED' ? 'Hoàn thành' : hoveredNovel.status === 'ONGOING' ? 'Đang ra' : 'Tạm ngưng'}
+                    {(hoveredNovel.status === 'COMPLETED' || hoveredNovel.status === 'Hoàn thành') ? 'Hoàn thành' : 'Đang ra'}
+                  </span>
+                )}
+                {hoveredNovel.is_vip && (
+                  <span className="bg-[#ffaa00]/10 text-[#ffaa00] border border-[#ffaa00]/20 px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                    <ViconicIcon name="u4:vip-crown-queen-1-bold" size={9} className="shrink-0" />
+                    <span>VIP</span>
                   </span>
                 )}
                 <span className="text-secondary flex items-center gap-0.5 bg-secondary/5 px-1.5 py-0.5 rounded border border-secondary/10">
@@ -223,6 +280,56 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
               {hoveredNovel.description ? hoveredNovel.description.replace(/\\n/g, '\n') : "Chưa có tóm tắt nội dung."}
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Global Custom Dialog Modal */}
+      {dialog && dialog.isOpen && (
+        <div className="fixed inset-0 bg-black/25 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-[#121316] max-w-sm w-full border border-outline-variant/30 rounded-2xl p-6 shadow-2xl space-y-6 animate-in zoom-in-95 duration-200">
+            {/* Top-to-Bottom Centered Layout */}
+            <div className="flex flex-col items-center text-center space-y-4">
+              <div className={`p-3.5 rounded-full shrink-0 ${
+                dialog.type === 'confirm' ? 'bg-primary/10 text-primary' : 'bg-amber-500/10 text-amber-600'
+              }`}>
+                <ViconicIcon name={dialog.icon || (dialog.type === 'confirm' ? 'help_outline' : 'warning_amber')} size={32} />
+              </div>
+              <div className="space-y-2 min-w-0 w-full">
+                <h3 className="font-black text-lg text-on-surface leading-tight">
+                  {dialog.title}
+                </h3>
+                <p className="text-sm text-on-surface-variant leading-relaxed whitespace-pre-line">
+                  {dialog.message}
+                </p>
+              </div>
+            </div>
+
+            {/* Equal-Width Action Buttons */}
+            <div className="flex items-center justify-center gap-3 pt-1 w-full">
+              {dialog.type === 'confirm' && (
+                <button
+                  onClick={handleCancelDialog}
+                  className="flex-1 bg-surface border border-outline-variant/40 hover:bg-surface-variant/20 py-2.5 rounded-xl font-bold text-xs transition-colors text-on-surface-variant"
+                >
+                  {dialog.cancelText || 'Hủy'}
+                </button>
+              )}
+              <button
+                onClick={handleConfirmDialog}
+                className="flex-1 bg-primary text-on-primary hover:bg-primary/95 py-2.5 rounded-xl font-bold text-xs transition-colors shadow-sm shadow-primary/10"
+              >
+                {dialog.confirmText || 'Đồng ý'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Sleek Floating Toast Notification without icon */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 left-6 sm:left-auto sm:w-80 bg-neutral-900 text-white border border-outline-variant/10 rounded-xl p-3.5 shadow-2xl z-[99999] animate-in slide-in-from-bottom-5 fade-in duration-300">
+          <p className="text-xs font-semibold leading-normal">
+            {toastMessage}
+          </p>
         </div>
       )}
     </div>
