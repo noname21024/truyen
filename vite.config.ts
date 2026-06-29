@@ -2,9 +2,25 @@ import path from "path"
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// https://vite.dev/config/
+const R2_BASE = 'https://pub-71585e468cd741989c43b01356ee9591.r2.dev';
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      // Prevent vite from bundling large onnxruntime-web WASM into dist.
+      // ort.env.wasm.wasmPaths (set in ChapterPage.tsx) loads these from R2 at runtime.
+      name: 'ort-wasm-r2',
+      transform(code, id) {
+        if (id.includes('onnxruntime-web') && code.includes('ort-wasm-simd-threaded.jsep.wasm')) {
+          return code.replace(
+            /new URL\("ort-wasm-simd-threaded\.jsep\.wasm",import\.meta\.url\)/g,
+            `"${R2_BASE}/wasm/ort-wasm-simd-threaded.jsep.wasm"`
+          );
+        }
+      }
+    }
+  ],
   base: './',
   resolve: {
     alias: {

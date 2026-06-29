@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Large TTS model files — hosted on R2, not bundled
+public/model/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

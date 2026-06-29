@@ -47,19 +47,27 @@ if (typeof window !== 'undefined' && (window as any).XMLHttpRequest) {
   }
 }
 
-// Register local Ngọc Huyền model to PATH_MAP
-if (typeof window !== 'undefined') {
-  (PATH_MAP as any)['vi_VN-ngoc_huyen'] = 'ngoc_huyen.onnx';
+const R2_BASE = 'https://pub-71585e468cd741989c43b01356ee9591.r2.dev';
 
-  // Hijack window.fetch to redirect Hugging Face CDN requests for ngoc_huyen to our local static path
+// Register Ngọc Huyền model — loaded from R2 at runtime, not bundled
+if (typeof window !== 'undefined') {
+  (PATH_MAP as any)['vi_VN-ngoc_huyen'] = `${R2_BASE}/audio_model/ngoc_huyen.onnx`;
+
+  // Configure onnxruntime-web to load WASM from R2 instead of bundled assets
+  // @ts-ignore
+  import('onnxruntime-web').then((ort) => {
+    ort.env.wasm.wasmPaths = `${R2_BASE}/wasm/`;
+  }).catch(() => {});
+
+  // Redirect Hugging Face CDN requests to R2
   const originalFetch = window.fetch;
   window.fetch = async function (input, init) {
     const url = typeof input === 'string' ? input : (input as Request).url || '';
     if (url.includes('diffusionstudio/piper-voices/resolve/main/ngoc_huyen.onnx.json')) {
-      return originalFetch('/model/ngoc_huyen.onnx.json', init);
+      return originalFetch(`${R2_BASE}/audio_model/ngoc_huyen.onnx.json`, init);
     }
     if (url.includes('diffusionstudio/piper-voices/resolve/main/ngoc_huyen.onnx')) {
-      return originalFetch('/model/ngoc_huyen.onnx', init);
+      return originalFetch(`${R2_BASE}/audio_model/ngoc_huyen.onnx`, init);
     }
     return originalFetch(input, init);
   };
