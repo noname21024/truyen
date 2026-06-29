@@ -9,9 +9,12 @@ const Footer: React.FC = () => {
     <footer className={`w-full mt-16 border-t border-surface-variant bg-surface-bright flex flex-col items-center space-y-6 py-12 px-4 relative z-10 ${
       isChapterPage ? 'pb-44 md:pb-36' : 'pb-24 md:pb-12'
     }`}>
-      <div className="text-primary font-bold text-lg sm:text-xl italic font-headline-sm flex items-center gap-2">
-        <img src="/logo.svg" alt="Pub Nih Truyện Logo" className="w-7 h-7 object-contain shrink-0" />
-        Pub Nih Truyện
+      <div className="flex items-center gap-1.5">
+        <img src="/logo.svg" alt="Pub Nih Truyện Logo" className="w-[25px] h-[25px] object-contain shrink-0" />
+        <span className="font-black tracking-tight text-primary text-sm sm:text-base flex items-center gap-0.5 select-none">
+          PUB<span className="text-on-surface font-light">NIH</span>
+          <span className="text-[7px] bg-primary/10 text-primary px-1 py-0.5 rounded-sm tracking-widest font-black ml-0.5 uppercase">TRUYỆN</span>
+        </span>
       </div>
       <div className="flex flex-wrap justify-center gap-6 font-label-bold text-label-bold">
         <a className="text-on-surface-variant hover:text-primary underline underline-offset-4 decoration-primary-container transition-all" href="#">Về chúng tôi</a>

@@ -77,23 +77,21 @@
 
 .hero-swiper .swiper-pagination {
   bottom: 24px !important;
-  text-align: left !important;
-  left: 32px !important;
+  left: 48px !important;
   width: auto !important;
+  right: auto !important;
+  transform: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
 }
 
 @media (max-width: 768px) {
   .hero-swiper .swiper-pagination {
     left: 50% !important;
     transform: translateX(-50%) !important;
-    text-align: center !important;
+    justify-content: center !important;
     bottom: 16px !important;
-  }
-}
-
-@media (min-width: 1300px) {
-  .hero-swiper .swiper-pagination {
-    left: calc((100vw - 1300px) / 2 + 32px) !important;
   }
 }
 

@@ -417,6 +417,7 @@ const ChapterPage: React.FC = () => {
         const u = JSON.parse(localStorage.getItem('user') || '{}');
         u.coin_balance = result.coin_balance;
         localStorage.setItem('user', JSON.stringify(u));
+        window.dispatchEvent(new Event('balance-updated'));
       } catch {}
     } catch (err: any) {
       const msg = err?.response?.data?.error || 'Mở khóa chương thất bại. Vui lòng thử lại.';

@@ -40,8 +40,18 @@ const Header: React.FC = () => {
       try { setUser(JSON.parse(saved)); } catch (e) {}
     }
     const openLogin = () => setIsLoginDialogOpen(true);
+    const handleBalanceUpdate = () => {
+      const latest = localStorage.getItem('user');
+      if (latest) {
+        try { setUser(JSON.parse(latest)); } catch (e) {}
+      }
+    };
     window.addEventListener('open-login-dialog', openLogin);
-    return () => window.removeEventListener('open-login-dialog', openLogin);
+    window.addEventListener('balance-updated', handleBalanceUpdate);
+    return () => {
+      window.removeEventListener('open-login-dialog', openLogin);
+      window.removeEventListener('balance-updated', handleBalanceUpdate);
+    };
   }, []);
 
   // Fetch unread notification count when user logs in
@@ -208,14 +218,18 @@ const Header: React.FC = () => {
   return (
     <header className="sticky top-0 z-50 w-full">
       <div className="bg-white/70 backdrop-blur-lg border-b border-primary-container/50 shadow-sm shadow-primary-container/20">
-        <div className="flex justify-between items-center px-8 h-16 max-w-[1300px] mx-auto">
+        <div className="flex justify-between items-center px-8 h-16 max-w-[1300px] mx-auto gap-4">
+          <div className="flex items-center gap-8 min-w-0">
         {/* Brand */}
         <Link 
-          className="text-lg sm:text-xl md:text-2xl font-bold text-primary italic font-headline-md tracking-tight flex items-center gap-2 truncate min-w-0" 
+          className="flex items-center gap-1.5 truncate min-w-0 hover:opacity-90 transition-opacity" 
           to="/"
         >
-          <img src="/logo.svg" alt="Pub Nih Truyện Logo" className="w-9 h-9 object-contain shrink-0" />
-          <span className="truncate">Pub Nih Truyện</span>
+          <img src="/logo.svg" alt="Pub Nih Truyện Logo" className="w-[30px] h-[30px] object-contain shrink-0" />
+          <span className="font-black tracking-tight text-primary text-base sm:text-lg flex items-center gap-0.5 select-none">
+            PUB<span className="text-on-surface font-light">NIH</span>
+            <span className="text-[8px] bg-primary/10 text-primary px-1 py-0.5 rounded-sm tracking-widest font-black ml-0.5 uppercase">TRUYỆN</span>
+          </span>
         </Link>
 
         {/* Navigation Links */}
@@ -265,7 +279,15 @@ const Header: React.FC = () => {
           >
             Mới cập nhật
           </Link>
-        </nav>
+
+          <Link 
+            className={`${location.pathname === '/leaderboard' ? 'text-primary border-b-2 border-primary pb-1' : 'text-on-surface-variant hover:text-primary transition-colors'}`} 
+            to="/leaderboard"
+          >
+            Bảng Công Đức
+          </Link>
+          </nav>
+        </div>
 
         {/* Search */}
         <div className="flex items-center space-x-4">
@@ -320,12 +342,6 @@ const Header: React.FC = () => {
               </div>
             )}
           </div>
-          <button 
-            className="sm:hidden p-2 text-on-surface-variant hover:text-primary transition-colors hover:bg-primary-container/20 rounded-sm flex items-center justify-center"
-            onClick={() => navigate('/search')}
-          >
-            <ViconicIcon name="search" size={24} className="shrink-0" />
-          </button>
 
           {user && (
             <div className="relative" ref={notifRef}>
@@ -345,7 +361,7 @@ const Header: React.FC = () => {
                     setUnreadCount(0);
                   }
                 }}
-                className="relative p-2 text-on-surface-variant hover:text-primary transition-colors hover:bg-primary-container/20 rounded-sm flex items-center justify-center"
+                className="relative p-2 text-on-surface-variant hover:text-primary transition-colors bg-surface-variant/40 border border-outline-variant/20 hover:bg-surface-variant/75 rounded-sm flex items-center justify-center shadow-sm"
                 aria-label="Thông báo"
               >
                 <ViconicIcon name="notifications" size={20} className="shrink-0" />
@@ -494,7 +510,7 @@ const Header: React.FC = () => {
           )}
 
           {user ? (
-            <div className="relative" ref={userMenuRef}>
+            <div className="relative hidden md:block" ref={userMenuRef}>
               <button
                 onClick={() => setIsUserDropdownOpen(!isUserDropdownOpen)}
                 className="flex items-center gap-1 focus:outline-none hover:scale-105 active:scale-95 transition-transform"
@@ -631,6 +647,19 @@ const Header: React.FC = () => {
       {isMenuOpen && (
         <div className="md:hidden fixed inset-x-0 bottom-0 top-16 bg-white/95 backdrop-blur-md z-40 flex flex-col border-t border-outline-variant/30 overflow-y-auto animate-in fade-in slide-in-from-top duration-200">
           <div className="px-8 py-6 space-y-6">
+            {/* Search Box */}
+            <div className="relative w-full">
+              <form onSubmit={(e) => { e.preventDefault(); navigate(`/search?q=${encodeURIComponent(searchQuery)}`); setIsMenuOpen(false); }}>
+                <ViconicIcon name="search" size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant shrink-0" />
+                <input 
+                  type="text" 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Tìm kiếm truyện..." 
+                  className="bg-surface-variant/30 text-on-surface text-sm rounded-sm pl-10 pr-4 py-2 border border-outline-variant/50 focus:outline-none w-full font-body-ui"
+                />
+              </form>
+            </div>
             {/* Main Links */}
             <div className="flex flex-col space-y-4 font-label-bold text-base">
               <Link 
@@ -658,6 +687,15 @@ const Header: React.FC = () => {
               >
                 <ViconicIcon name="trending_up" size={20} className="shrink-0" />
                 <span>Xếp hạng</span>
+              </Link>
+
+              <Link 
+                className={`py-2.5 px-3 rounded-sm hover:bg-surface-variant hover:text-primary transition-colors flex items-center gap-3 ${location.pathname === '/leaderboard' ? 'text-primary bg-primary/5 font-bold' : 'text-on-surface-variant'}`}
+                to="/leaderboard"
+                onClick={() => setIsMenuOpen(false)}
+              >
+                <ViconicIcon name="military_tech" size={20} className="shrink-0" />
+                <span>Bảng Công Đức</span>
               </Link>
             </div>
 
@@ -704,8 +742,49 @@ const Header: React.FC = () => {
                       </span>
                     )}
                   </span>
+                  <div className="w-full flex flex-col gap-1 border-t border-outline-variant/30 pt-3 text-xs font-semibold text-on-surface-variant">
+                    <Link
+                      to="/coins"
+                      className="flex items-center justify-between px-3 py-2 text-on-surface-variant hover:bg-primary/5 hover:text-primary transition-colors rounded-sm"
+                      onClick={() => setIsMenuOpen(false)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <ViconicIcon name="toll" size={15} className="text-primary shrink-0" />
+                        <span>Ví xu</span>
+                      </div>
+                      <span className="font-black text-primary">{(user?.coin_balance ?? 0).toLocaleString('vi-VN')} xu</span>
+                    </Link>
+
+                    <Link
+                      to="/profile"
+                      className="flex items-center gap-2 px-3 py-2 text-on-surface-variant hover:bg-primary/5 hover:text-primary transition-colors rounded-sm"
+                      onClick={() => setIsMenuOpen(false)}
+                    >
+                      <ViconicIcon name="person" size={15} className="shrink-0" />
+                      <span>Trang cá nhân</span>
+                    </Link>
+
+                    <Link
+                      to="/profile"
+                      className="flex items-center gap-2 px-3 py-2 text-on-surface-variant hover:bg-primary/5 hover:text-primary transition-colors rounded-sm"
+                      onClick={() => setIsMenuOpen(false)}
+                    >
+                      <ViconicIcon name="auto_stories" size={15} className="shrink-0" />
+                      <span>Tủ sách theo dõi</span>
+                    </Link>
+
+                    <Link
+                      to="/coins"
+                      className="flex items-center gap-2 px-3 py-2 text-on-surface-variant hover:bg-primary/5 hover:text-primary transition-colors rounded-sm"
+                      onClick={() => setIsMenuOpen(false)}
+                    >
+                      <ViconicIcon name="add_circle" size={15} className="shrink-0" />
+                      <span>Nạp xu</span>
+                    </Link>
+                  </div>
+
                   <button 
-                    className="w-full bg-outline-variant/30 text-on-surface-variant font-label-bold text-xs py-2 px-6 rounded-sm hover:bg-outline-variant/50 transition-all flex items-center justify-center gap-2"
+                    className="w-full bg-outline-variant/30 text-on-surface-variant font-label-bold text-xs py-2 px-6 rounded-sm hover:bg-red-50 hover:text-red-600 border-t border-outline-variant/20 pt-3 transition-all flex items-center justify-center gap-2"
                     onClick={() => {
                       showCustomConfirm(
                         'Đăng xuất',

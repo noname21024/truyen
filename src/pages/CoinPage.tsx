@@ -63,6 +63,10 @@ export default function CoinPage() {
   const [subscribingVIP, setSubscribingVIP] = useState(false)
   const [activeTab, setActiveTab] = useState<'coins' | 'vip'>('coins')
   const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [expandedTxId, setExpandedTxId] = useState<number | null>(null)
+  const [reportingTxId, setReportingTxId] = useState<number | null>(null)
+  const [cancellingTxId, setCancellingTxId] = useState<number | null>(null)
+  const [reportedTxIds, setReportedTxIds] = useState<Set<number>>(new Set())
 
   const countdown = useCountdown(deposit?.expires_at ?? null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -88,9 +92,9 @@ export default function CoinPage() {
         const u = JSON.parse(saved)
         setUser(u)
         setCoinBalance(u.coin_balance ?? 0)
-      } catch {}
+      } catch { }
     }
-    CoinService.getPackages().then(setPackages).catch(() => {})
+    CoinService.getPackages().then(setPackages).catch(() => { })
 
     // Restore pending deposit across page refresh
     const savedDeposit = localStorage.getItem('pending_deposit')
@@ -120,13 +124,14 @@ export default function CoinPage() {
           u.coin_balance = data.coin_balance
           u.is_vip = data.is_vip
           localStorage.setItem('user', JSON.stringify(u))
-        } catch {}
+          window.dispatchEvent(new Event('balance-updated'))
+        } catch { }
       })
-      .catch(() => {})
+      .catch(() => { })
     setLoadingTxns(true)
     CoinService.getTransactions()
       .then(setTransactions)
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => setLoadingTxns(false))
   }, [user])
 
@@ -165,9 +170,10 @@ export default function CoinPage() {
             u.coin_balance = bal.coin_balance
             u.is_vip = bal.is_vip
             localStorage.setItem('user', JSON.stringify(u))
-          } catch {}
+            window.dispatchEvent(new Event('balance-updated'))
+          } catch { }
         }
-      } catch {}
+      } catch { }
     }
 
     check()
@@ -197,9 +203,9 @@ export default function CoinPage() {
   const customAmountNum = parseInt(customAmount.replace(/\D/g, ''), 10) || 0
   const customAmountError: string | null =
     customAmount && customAmountNum < 5000 ? 'Tối thiểu 5.000 VND' :
-    customAmount && customAmountNum % 1000 !== 0 ? 'Phải là bội số của 1.000 (vd: 5.000, 10.000, 50.000)' :
-    customAmount && customAmountNum > 10_000_000 ? 'Tối đa 10.000.000 VND' :
-    null
+      customAmount && customAmountNum % 1000 !== 0 ? 'Phải là bội số của 1.000 (vd: 5.000, 10.000, 50.000)' :
+        customAmount && customAmountNum > 10_000_000 ? 'Tối đa 10.000.000 VND' :
+          null
 
   const handleCopy = (text: string, field: string) => {
     navigator.clipboard.writeText(text)
@@ -207,7 +213,7 @@ export default function CoinPage() {
         setCopiedField(field)
         setTimeout(() => setCopiedField(null), 1500)
       })
-      .catch(() => {})
+      .catch(() => { })
   }
 
   const handleReportPayment = async () => {
@@ -220,6 +226,60 @@ export default function CoinPage() {
       showCustomAlert('Lỗi hệ thống', 'Không thể gửi thông báo đối soát. Vui lòng thử lại.')
     } finally {
       setReporting(false)
+    }
+  }
+
+  const handleCancelActiveDeposit = async () => {
+    if (!deposit || cancellingTxId !== null) return
+    setCancellingTxId(deposit.transaction_id)
+    try {
+      await CoinService.cancelDeposit(deposit.transaction_id)
+      setDeposit(null)
+      setSelectedPkg(null)
+      setDepositStatus(null)
+      setReported(false)
+      localStorage.removeItem('pending_deposit')
+      setLoadingTxns(true)
+      CoinService.getTransactions().then(setTransactions).catch(() => {}).finally(() => setLoadingTxns(false))
+    } catch {
+      showCustomAlert('Lỗi', 'Không thể hủy giao dịch. Vui lòng thử lại.')
+    } finally {
+      setCancellingTxId(null)
+    }
+  }
+
+  const handleReportFromList = async (txId: number) => {
+    if (reportingTxId !== null) return
+    setReportingTxId(txId)
+    try {
+      await CoinService.reportPayment(txId)
+      setReportedTxIds(prev => new Set([...prev, txId]))
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || 'Không thể gửi thông báo. Vui lòng thử lại.'
+      showCustomAlert('Lỗi', msg)
+    } finally {
+      setReportingTxId(null)
+    }
+  }
+
+  const handleCancelFromList = async (txId: number) => {
+    if (cancellingTxId !== null) return
+    setCancellingTxId(txId)
+    try {
+      await CoinService.cancelDeposit(txId)
+      setTransactions(prev => prev.map(t => t.id === txId ? { ...t, status: 'cancelled' as const } : t))
+      setExpandedTxId(null)
+      if (deposit?.transaction_id === txId) {
+        setDeposit(null)
+        setSelectedPkg(null)
+        setDepositStatus(null)
+        setReported(false)
+        localStorage.removeItem('pending_deposit')
+      }
+    } catch {
+      showCustomAlert('Lỗi', 'Không thể hủy giao dịch. Vui lòng thử lại.')
+    } finally {
+      setCancellingTxId(null)
     }
   }
 
@@ -237,7 +297,7 @@ export default function CoinPage() {
       setLoadingTxns(true)
       CoinService.getTransactions()
         .then(setTransactions)
-        .catch(() => {})
+        .catch(() => { })
         .finally(() => setLoadingTxns(false))
     } catch {
       showCustomAlert('Lỗi giao dịch', 'Không thể tạo yêu cầu nạp tiền. Vui lòng thử lại.')
@@ -273,11 +333,12 @@ export default function CoinPage() {
             u.coin_balance = result.coin_balance
             u.is_vip = true
             localStorage.setItem('user', JSON.stringify(u))
-          } catch {}
+            window.dispatchEvent(new Event('balance-updated'))
+          } catch { }
           setLoadingTxns(true)
           CoinService.getTransactions()
             .then(setTransactions)
-            .catch(() => {})
+            .catch(() => { })
             .finally(() => setLoadingTxns(false))
         } catch (err: any) {
           const msg = err?.response?.data?.error || 'Đăng ký thất bại. Vui lòng thử lại.'
@@ -292,9 +353,9 @@ export default function CoinPage() {
   }
 
   const txStatusLabel: Record<string, { label: string; color: string }> = {
-    pending:   { label: 'Chờ xác nhận', color: 'text-amber-700 bg-amber-50 border border-amber-500/30' },
-    completed: { label: 'Hoàn thành',   color: 'text-emerald-700 bg-emerald-50 border border-emerald-500/30' },
-    cancelled: { label: 'Đã hủy',       color: 'text-red-600 bg-red-50 border border-red-500/30' },
+    pending: { label: 'Chờ xác nhận', color: 'text-amber-700 bg-amber-50 border border-amber-500/30' },
+    completed: { label: 'Hoàn thành', color: 'text-emerald-700 bg-emerald-50 border border-emerald-500/30' },
+    cancelled: { label: 'Đã hủy', color: 'text-red-600 bg-red-50 border border-red-500/30' },
   }
 
   if (!user) {
@@ -310,15 +371,15 @@ export default function CoinPage() {
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3 justify-center">
-          <button 
+          <button
             onClick={() => window.dispatchEvent(new CustomEvent('open-login-dialog'))}
             className="bg-primary text-on-primary hover:bg-primary/95 px-6 py-3 rounded-xl font-bold text-sm shadow-sm transition-all flex items-center justify-center gap-2"
           >
             <ViconicIcon name="login" size={16} />
             <span>Đăng nhập ngay</span>
           </button>
-          <Link 
-            to="/" 
+          <Link
+            to="/"
             className="bg-surface border border-outline-variant/30 text-on-surface hover:bg-surface-variant/20 px-6 py-3 rounded-xl font-bold text-sm transition-all"
           >
             Về trang chủ
@@ -344,7 +405,7 @@ export default function CoinPage() {
         <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-primary to-on-primary-fixed-variant p-6 text-white shadow-lg border border-primary/20">
           <div className="absolute -right-10 -bottom-10 w-40 h-40 rounded-full bg-white/5 blur-xl pointer-events-none" />
           <div className="absolute -left-10 -top-10 w-24 h-24 rounded-full bg-white/10 blur-lg pointer-events-none" />
-          
+
           <div className="flex justify-between items-start">
             <div className="space-y-1">
               <span className="text-xs font-bold tracking-wider uppercase text-white/70">Số dư khả dụng</span>
@@ -357,7 +418,7 @@ export default function CoinPage() {
               <ViconicIcon name="fehc:coin" size={26} className="text-amber-400" />
             </div>
           </div>
-          
+
           <div className="mt-8 pt-4 border-t border-white/10 flex justify-between items-center text-xs text-white/70">
             <div>1 xu = 1 VND</div>
             <div className="flex items-center gap-1">
@@ -374,7 +435,7 @@ export default function CoinPage() {
             <div className="absolute top-0 right-0 bg-amber-500/20 text-amber-300 text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-bl-xl border-l border-b border-amber-500/20">
               Active Member
             </div>
-            
+
             <div className="flex justify-between items-start">
               <div className="space-y-1">
                 <span className="text-xs font-bold tracking-wider uppercase text-amber-400/80">Thành Viên VIP</span>
@@ -404,10 +465,10 @@ export default function CoinPage() {
                 <ViconicIcon name="u4:vip-crown-queen-1-bold" size={26} />
               </div>
             </div>
-            
+
             <div className="mt-8 pt-4 border-t border-outline-variant/15 flex justify-between items-center text-xs text-on-surface-variant">
               <div>49.000 xu / 30 ngày</div>
-              <button 
+              <button
                 onClick={() => setActiveTab('vip')}
                 className="text-primary hover:text-primary/80 font-bold flex items-center gap-1 group transition-colors"
               >
@@ -425,7 +486,7 @@ export default function CoinPage() {
           <ViconicIcon name="notifications_active" size={18} className="text-primary" />
           <span>Thông Báo & Nhắc Nhở Hệ Thống</span>
         </h2>
-        
+
         <div className="space-y-3.5">
           {/* Expiry / VIP alert notification */}
           {isVIPMember ? (
@@ -493,22 +554,20 @@ export default function CoinPage() {
         <div className="inline-flex p-1 bg-surface-variant/30 border border-outline-variant/20 rounded-full w-full max-w-md">
           <button
             onClick={() => setActiveTab('coins')}
-            className={`flex-1 py-2.5 px-4 rounded-full font-bold text-sm transition-all duration-300 flex items-center justify-center gap-2 ${
-              activeTab === 'coins'
+            className={`flex-1 py-2.5 px-4 rounded-full font-bold text-sm transition-all duration-300 flex items-center justify-center gap-2 ${activeTab === 'coins'
                 ? 'bg-primary text-on-primary shadow-sm'
                 : 'text-on-surface-variant hover:text-on-surface'
-            }`}
+              }`}
           >
             <ViconicIcon name="fehc:coin" size={16} />
             <span>Nạp Xu</span>
           </button>
           <button
             onClick={() => setActiveTab('vip')}
-            className={`flex-1 py-2.5 px-4 rounded-full font-bold text-sm transition-all duration-300 flex items-center justify-center gap-2 ${
-              activeTab === 'vip'
+            className={`flex-1 py-2.5 px-4 rounded-full font-bold text-sm transition-all duration-300 flex items-center justify-center gap-2 ${activeTab === 'vip'
                 ? 'bg-primary text-on-primary shadow-sm'
                 : 'text-on-surface-variant hover:text-on-surface'
-            }`}
+              }`}
           >
             <ViconicIcon name="u4:vip-crown-queen-1-bold" size={16} />
             <span>Hội viên VIP</span>
@@ -529,23 +588,22 @@ export default function CoinPage() {
                 Tỉ lệ: 1 xu = 1 VND
               </span>
             </div>
-            
+
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               {packages.map(pkg => {
                 const isSelected = selectedPkg?.id === pkg.id;
                 const isPopular = pkg.price === 50000 || pkg.price === 100000;
-                
+
                 return (
                   <button
                     key={pkg.id}
                     onClick={() => handleSelectPackage(pkg)}
-                    className={`group relative flex flex-col items-center p-5 rounded-xl border transition-all duration-300 text-center ${
-                      isSelected
+                    className={`group relative flex flex-col items-center p-5 rounded-xl border transition-all duration-300 text-center ${isSelected
                         ? 'border-primary bg-primary/5 shadow-md shadow-primary/5'
                         : isPopular
                           ? 'border-amber-400 bg-amber-500/5 hover:border-primary/50 hover:bg-surface-variant/10'
                           : 'border-outline-variant/40 hover:border-primary/50 hover:bg-surface-variant/10'
-                    }`}
+                      }`}
                   >
                     {pkg.discount > 0 && (
                       <span className="absolute -top-2.5 -right-1 bg-red-500 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full shadow-sm">
@@ -558,15 +616,14 @@ export default function CoinPage() {
                         Khuyên Dùng
                       </span>
                     )}
-                    
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-3 transition-colors ${
-                      isSelected ? 'bg-primary/10 text-primary' : 'bg-surface-variant/40 text-on-surface-variant group-hover:bg-primary/10 group-hover:text-primary'
-                    }`}>
+
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-3 transition-colors ${isSelected ? 'bg-primary/10 text-primary' : 'bg-surface-variant/40 text-on-surface-variant group-hover:bg-primary/10 group-hover:text-primary'
+                      }`}>
                       <ViconicIcon name="fehc:coin" size={24} />
                     </div>
-                    
+
                     <span className="font-black text-xl text-primary">{pkg.label}</span>
-                    
+
                     <div className="flex flex-col items-center mt-1">
                       <span className="font-bold text-sm text-on-surface">{formatVND(pkg.price)}</span>
                       {pkg.original_price > pkg.price && (
@@ -579,7 +636,7 @@ export default function CoinPage() {
                     <div className="mt-3 pt-2.5 border-t border-outline-variant/20 w-full text-[11px] font-bold text-on-surface-variant">
                       Đọc ~{Math.floor(pkg.coins / 100)} chương VIP
                     </div>
-                    
+
                     {isSelected && (
                       <div className="absolute bottom-2 right-2 text-primary">
                         <ViconicIcon name="check_circle" size={16} />
@@ -592,15 +649,13 @@ export default function CoinPage() {
               {/* Custom amount card */}
               <button
                 onClick={handleSelectCustom}
-                className={`group relative flex flex-col items-center p-5 rounded-xl border transition-all duration-300 text-center ${
-                  isCustom
+                className={`group relative flex flex-col items-center p-5 rounded-xl border transition-all duration-300 text-center ${isCustom
                     ? 'border-primary bg-primary/5 shadow-md shadow-primary/5'
                     : 'border-dashed border-outline-variant/60 hover:border-primary/50 hover:bg-surface-variant/10'
-                }`}
+                  }`}
               >
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-3 transition-colors ${
-                  isCustom ? 'bg-primary/10 text-primary' : 'bg-surface-variant/40 text-on-surface-variant group-hover:bg-primary/10 group-hover:text-primary'
-                }`}>
+                <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-3 transition-colors ${isCustom ? 'bg-primary/10 text-primary' : 'bg-surface-variant/40 text-on-surface-variant group-hover:bg-primary/10 group-hover:text-primary'
+                  }`}>
                   <ViconicIcon name="edit" size={24} />
                 </div>
                 <span className="font-black text-xl text-primary">Tùy chọn</span>
@@ -764,11 +819,10 @@ export default function CoinPage() {
                   </div>
                 </div>
                 {countdown && (
-                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold font-mono tabular-nums shadow-sm border ${
-                    countdown <= '03:00' 
-                      ? 'bg-red-50 text-red-600 border-red-200/60 animate-pulse' 
+                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold font-mono tabular-nums shadow-sm border ${countdown <= '03:00'
+                      ? 'bg-red-50 text-red-600 border-red-200/60 animate-pulse'
                       : 'bg-emerald-50 text-emerald-700 border-emerald-200/60'
-                  }`}>
+                    }`}>
                     <span>⏱ Hết hạn sau:</span>
                     <span>{countdown}</span>
                   </div>
@@ -911,6 +965,13 @@ export default function CoinPage() {
                 >
                   ← Chọn gói nạp khác
                 </button>
+                <button
+                  onClick={handleCancelActiveDeposit}
+                  disabled={cancellingTxId !== null}
+                  className="text-xs text-red-500 hover:text-red-700 hover:underline transition-colors disabled:opacity-60"
+                >
+                  {cancellingTxId !== null ? 'Đang hủy...' : 'Hủy mã QR này'}
+                </button>
               </div>
             </section>
           )}
@@ -922,7 +983,7 @@ export default function CoinPage() {
         <section className="space-y-6 animate-in fade-in duration-300">
           <div className="relative overflow-hidden border border-amber-300/60 bg-gradient-to-br from-amber-500/5 to-amber-600/10 rounded-xl p-6 sm:p-8 shadow-sm">
             <div className="absolute -right-16 -top-16 w-48 h-48 rounded-full bg-amber-500/5 blur-2xl pointer-events-none" />
-            
+
             <div className="flex flex-col md:flex-row gap-6 md:items-center justify-between">
               <div className="space-y-4 max-w-xl">
                 <div className="flex items-center gap-2.5">
@@ -934,7 +995,7 @@ export default function CoinPage() {
                     <p className="text-xs text-amber-800">Trải nghiệm đọc truyện hoàn hảo, không giới hạn.</p>
                   </div>
                 </div>
-                
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2">
                   {[
                     { title: 'Không giới hạn chapter', desc: 'Đọc tất cả chapter VIP của mọi bộ truyện' },
@@ -1004,8 +1065,8 @@ export default function CoinPage() {
                 <span>
                   Số dư hiện tại của bạn: <strong>{coinBalance.toLocaleString('vi-VN')} xu</strong> (thiếu <strong>{(VIP_PRICE - coinBalance).toLocaleString('vi-VN')} xu</strong>)
                 </span>
-                <button 
-                  onClick={() => setActiveTab('coins')} 
+                <button
+                  onClick={() => setActiveTab('coins')}
                   className="font-bold underline hover:text-amber-900 shrink-0"
                 >
                   Nạp thêm xu ngay →
@@ -1080,40 +1141,153 @@ export default function CoinPage() {
             <span>Chưa phát sinh giao dịch nào.</span>
           </div>
         ) : (
-          <div className="space-y-2.5 max-h-[480px] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-primary [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-primary/80 [scrollbar-width:thin] [scrollbar-color:#78555e_transparent]">
+          <div className="space-y-2.5 max-h-[560px] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-primary [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-primary/80 [scrollbar-width:thin] [scrollbar-color:#78555e_transparent]">
             {transactions.map(tx => {
               const st = txStatusLabel[tx.status] ?? { label: tx.status, color: 'text-on-surface-variant' }
-              const isDeposit = tx.type === 'deposit';
+              const isDeposit = tx.type === 'deposit'
+              const isExpanded = expandedTxId === tx.id
+              const isPending = tx.status === 'pending'
+              const isReported = reportedTxIds.has(tx.id)
+              const within24h = new Date(tx.created_at).getTime() + 24 * 60 * 60 * 1000 > Date.now()
+              const txDescription = `YUME${String(tx.id).padStart(6, '0')}`
               return (
                 <div
                   key={tx.id}
-                  className="flex items-center gap-4 p-4 border border-outline-variant/30 rounded-xl bg-surface hover:bg-surface-variant/10 transition-all duration-200 shadow-sm"
+                  className="border border-outline-variant/30 rounded-xl bg-surface shadow-sm overflow-hidden"
                 >
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-                    isDeposit ? 'bg-emerald-50 text-emerald-600' : 'bg-primary/10 text-primary'
-                  }`}>
-                    <ViconicIcon name={isDeposit ? 'fehc:coin' : 'lock_open'} size={20} />
+                  {/* Row header */}
+                  <div
+                    onClick={() => setExpandedTxId(isExpanded ? null : tx.id)}
+                    className="flex items-center gap-4 p-4 cursor-pointer hover:bg-surface-variant/10 transition-colors"
+                  >
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${isDeposit ? 'bg-emerald-50 text-emerald-600' : 'bg-primary/10 text-primary'}`}>
+                      <ViconicIcon name={isDeposit ? 'fehc:coin' : 'lock_open'} size={20} />
+                    </div>
+                    <div className="flex-grow min-w-0">
+                      <p className="text-sm font-bold text-on-surface truncate">{tx.note || (isDeposit ? 'Nạp xu vào ví' : 'Mở khóa chương truyện')}</p>
+                      <div className="flex items-center gap-2 mt-0.5 text-xs text-on-surface-variant">
+                        <span>{formatDate(tx.created_at)}</span>
+                        {tx.ref_code && (
+                          <><span>•</span><span className="font-mono bg-surface-variant/50 px-1.5 py-0.5 rounded text-[10px]">{tx.ref_code}</span></>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end shrink-0 gap-1.5">
+                      <span className={`font-black text-sm ${isDeposit ? 'text-emerald-600' : 'text-primary'}`}>
+                        {isDeposit ? '+' : '-'}{tx.coins.toLocaleString('vi-VN')} xu
+                      </span>
+                      <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${st.color} shadow-sm`}>
+                        {st.label}
+                      </span>
+                    </div>
+                    <ViconicIcon name={isExpanded ? 'expand_less' : 'expand_more'} size={16} className="text-on-surface-variant shrink-0" />
                   </div>
-                  <div className="flex-grow min-w-0">
-                    <p className="text-sm font-bold text-on-surface truncate">{tx.note || (isDeposit ? 'Nạp xu vào ví' : 'Mở khóa chương truyện')}</p>
-                    <div className="flex items-center gap-2 mt-0.5 text-xs text-on-surface-variant">
-                      <span>{formatDate(tx.created_at)}</span>
-                      {tx.ref_code && (
+
+                  {/* Expanded details */}
+                  {isExpanded && (
+                    <div className="px-4 pb-4 pt-1 border-t border-outline-variant/20 bg-surface-variant/5 space-y-3">
+                      {/* Pending deposit with action buttons */}
+                      {isPending && isDeposit && within24h && (
                         <>
-                          <span>•</span>
-                          <span className="font-mono bg-surface-variant/50 px-1.5 py-0.5 rounded text-[10px]">{tx.ref_code}</span>
+                          <div className="pt-2 space-y-1.5 text-xs text-on-surface-variant">
+                            <div className="flex justify-between">
+                              <span>Số tiền chuyển khoản</span>
+                              <span className="font-bold text-on-surface">{formatVND(tx.vnd_amount)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Nội dung CK bắt buộc</span>
+                              <span className="font-mono font-bold text-amber-700">{txDescription}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Xu sẽ nhận</span>
+                              <span className="font-bold text-primary">{tx.coins.toLocaleString('vi-VN')} xu</span>
+                            </div>
+                          </div>
+                          <p className="text-[11px] text-amber-800 bg-amber-50/60 border border-amber-200/60 rounded-lg px-3 py-2">
+                            Nếu bạn đã chuyển khoản, nhấn xác nhận để thông báo admin duyệt. Đơn sẽ tự hủy sau 24h nếu không xác nhận.
+                          </p>
+                          <div className="flex gap-2">
+                            {isReported ? (
+                              <div className="flex-1 flex items-center justify-center gap-2 py-2.5 px-3 text-xs font-bold bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl">
+                                <span className="w-3.5 h-3.5 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin shrink-0" />
+                                Đã gửi — chờ admin xác nhận...
+                              </div>
+                            ) : (
+                              <button
+                                onClick={e => { e.stopPropagation(); handleReportFromList(tx.id) }}
+                                disabled={reportingTxId !== null}
+                                className="flex-1 flex items-center justify-center gap-2 py-2.5 px-3 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl transition-colors disabled:opacity-60"
+                              >
+                                {reportingTxId === tx.id
+                                  ? <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />Đang gửi...</>
+                                  : <><ViconicIcon name="check_circle" size={14} />Tôi đã chuyển khoản thành công</>
+                                }
+                              </button>
+                            )}
+                            <button
+                              onClick={e => { e.stopPropagation(); handleCancelFromList(tx.id) }}
+                              disabled={cancellingTxId !== null}
+                              className="py-2.5 px-3 text-xs font-bold border border-red-300 text-red-600 hover:bg-red-50 rounded-xl transition-colors disabled:opacity-60 shrink-0"
+                            >
+                              {cancellingTxId === tx.id ? 'Đang hủy...' : 'Hủy đơn'}
+                            </button>
+                          </div>
                         </>
                       )}
+
+                      {/* Pending but past 24h — will be auto-cancelled next fetch */}
+                      {isPending && isDeposit && !within24h && (
+                        <p className="pt-2 text-xs text-red-600 font-semibold">Đơn đã quá 24h và sẽ tự động bị hủy.</p>
+                      )}
+
+                      {/* Completed */}
+                      {tx.status === 'completed' && (
+                        <div className="pt-2 space-y-1.5 text-xs text-on-surface-variant">
+                          {tx.completed_at && (
+                            <div className="flex justify-between">
+                              <span>Hoàn thành lúc</span>
+                              <span className="font-bold text-on-surface">{formatDate(tx.completed_at)}</span>
+                            </div>
+                          )}
+                          {isDeposit && (
+                            <div className="flex justify-between">
+                              <span>Đã cộng vào ví</span>
+                              <span className="font-bold text-emerald-600">+{tx.coins.toLocaleString('vi-VN')} xu</span>
+                            </div>
+                          )}
+                          <p className="text-emerald-700 font-semibold">✓ Giao dịch đã được ghi nhận thành công.</p>
+                        </div>
+                      )}
+
+                      {/* Cancelled */}
+                      {tx.status === 'cancelled' && (
+                        <div className="pt-2 space-y-1 text-xs text-on-surface-variant">
+                          <p className="text-red-600 font-semibold">✕ Giao dịch đã bị hủy.</p>
+                          {isDeposit && tx.expires_at && new Date(tx.expires_at) < new Date() && (
+                            <p>Lý do: Không xác nhận chuyển khoản trong thời hạn cho phép.</p>
+                          )}
+                          <p>Không có xu nào bị trừ hoặc cộng cho đơn này.</p>
+                        </div>
+                      )}
+
+                      {/* Spend transaction */}
+                      {!isDeposit && tx.status === 'completed' && (
+                        <div className="pt-2 space-y-1.5 text-xs text-on-surface-variant">
+                          {tx.completed_at && (
+                            <div className="flex justify-between">
+                              <span>Thời gian</span>
+                              <span className="font-bold text-on-surface">{formatDate(tx.completed_at)}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between">
+                            <span>Xu đã dùng</span>
+                            <span className="font-bold text-primary">-{tx.coins.toLocaleString('vi-VN')} xu</span>
+                          </div>
+                          {tx.note && <p className="text-on-surface/70 leading-relaxed">{tx.note}</p>}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  <div className="flex flex-col items-end shrink-0 gap-1.5">
-                    <span className={`font-black text-sm ${isDeposit ? 'text-emerald-600' : 'text-primary'}`}>
-                      {isDeposit ? '+' : '-'}{tx.coins.toLocaleString('vi-VN')} xu
-                    </span>
-                    <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${st.color} shadow-sm`}>
-                      {st.label}
-                    </span>
-                  </div>
+                  )}
                 </div>
               )
             })}
@@ -1131,7 +1305,7 @@ export default function CoinPage() {
                 Chào mừng bạn đến với hội viên VIP! Quyền lợi đọc truyện không giới hạn đã kích hoạt thành công.
               </p>
             </div>
-            <button 
+            <button
               onClick={() => setShowVipNotification(false)}
               className="text-neutral-400 hover:text-white transition-colors text-xs font-bold shrink-0"
             >

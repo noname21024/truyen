@@ -9,7 +9,7 @@ import { NovelService, CoinService, CommentService, type StoryPriceInfo, type Ch
 import DonateModal from '@/components/DonateModal';
 import { isUserVIP } from '@/lib/user';
 import { STICKER_SETS } from '@/data/stickers';
-
+import { showToast } from '@/lib/dialog';
 
 interface Reply {
   id: number;
@@ -436,7 +436,7 @@ const DetailPage: React.FC = () => {
       setNewCommentText('');
       if (mainEditorRef.current) mainEditorRef.current.innerHTML = '';
     } catch {
-      alert("Đăng bình luận thất bại. Vui lòng đăng nhập và thử lại!");
+      showToast("Đăng bình luận thất bại. Vui lòng đăng nhập và thử lại!");
     } finally {
       setCommentSubmitting(false);
     }
@@ -446,7 +446,7 @@ const DetailPage: React.FC = () => {
     e.preventDefault();
     if (!replyText.trim() || !storyDbId) return;
     if (!currentUser) {
-      alert("Vui lòng đăng nhập để phản hồi cảm nhận!");
+      showToast("Vui lòng đăng nhập để phản hồi cảm nhận!");
       return;
     }
     try {
@@ -465,7 +465,7 @@ const DetailPage: React.FC = () => {
       setReplyingToId(null);
       if (replyEditorRef.current) replyEditorRef.current.innerHTML = '';
     } catch {
-      alert("Phản hồi thất bại. Vui lòng đăng nhập và thử lại!");
+      showToast("Phản hồi thất bại. Vui lòng đăng nhập và thử lại!");
     }
   };
 
@@ -517,7 +517,7 @@ const DetailPage: React.FC = () => {
 
   const handleLikeComment = (commentId: number) => {
     if (!currentUser) {
-      alert("Vui lòng đăng nhập tài khoản để thích bình luận!");
+      showToast("Vui lòng đăng nhập tài khoản để thích bình luận!");
       return;
     }
     const likedKey = `liked_story_comments_${id}`;
@@ -534,7 +534,7 @@ const DetailPage: React.FC = () => {
 
   const handleRate = (rating: number) => {
     if (!currentUser) {
-      alert("Vui lòng đăng nhập tài khoản để đánh giá truyện!");
+      showToast("Vui lòng đăng nhập tài khoản để đánh giá truyện!");
       return;
     }
     if (ratingData.userRating > 0) return;
@@ -551,17 +551,17 @@ const DetailPage: React.FC = () => {
 
   const handleFollowToggle = () => {
     if (!currentUser) {
-      alert("Vui lòng đăng nhập tài khoản để theo dõi truyện!");
+      showToast("Vui lòng đăng nhập tài khoản để theo dõi truyện!");
       return;
     }
     const nextState = !isFollowed;
     setIsFollowed(nextState);
     if (nextState) {
       localStorage.setItem(`follow_novel_${id}_user_${currentUser.name}`, '1');
-      alert(`Đã thêm bộ truyện vào tủ sách theo dõi!`);
+      showToast(`Đã thêm bộ truyện vào tủ sách theo dõi!`);
     } else {
       localStorage.removeItem(`follow_novel_${id}_user_${currentUser.name}`);
-      alert(`Đã hủy theo dõi bộ truyện.`);
+      showToast(`Đã hủy theo dõi bộ truyện.`);
     }
   };
 
@@ -659,6 +659,13 @@ const DetailPage: React.FC = () => {
               setUnlockedChapters(prev => [...prev, chap.chapter_number]);
               showToast(`Mở khóa thành công "${chap.title || `Chương ${chap.chapter_number}`}"!`);
               localStorage.setItem('user_balance', String(res.coin_balance));
+              try {
+                const u = JSON.parse(localStorage.getItem('user') || '{}');
+                if (u && u.name) {
+                  u.coin_balance = res.coin_balance;
+                  localStorage.setItem('user', JSON.stringify(u));
+                }
+              } catch (e) {}
               window.dispatchEvent(new CustomEvent('balance-updated'));
             } catch (err: any) {
               console.error("Failed to unlock chapter:", err);
@@ -705,6 +712,13 @@ const DetailPage: React.FC = () => {
             showToast(`Đã mở khóa ${result.unlocked_count} chapter! Số dư còn: ${result.coin_balance.toLocaleString('vi-VN')} xu.`);
             setBalance(result.coin_balance);
             localStorage.setItem('user_balance', String(result.coin_balance));
+            try {
+              const u = JSON.parse(localStorage.getItem('user') || '{}');
+              if (u && u.name) {
+                u.coin_balance = result.coin_balance;
+                localStorage.setItem('user', JSON.stringify(u));
+              }
+            } catch (e) {}
             window.dispatchEvent(new CustomEvent('balance-updated'));
             
             CoinService.getStoryPrice(novel.slug).then(setStoryPrice).catch(() => {});
@@ -961,10 +975,10 @@ const DetailPage: React.FC = () => {
               </button>
               <button
                 onClick={() => setShowDonateModal(true)}
-                className="font-bold text-xs px-4 py-2 rounded-sm transition-all duration-200 flex items-center gap-1.5 border border-amber-400/60 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 active:scale-95 dark:text-amber-400"
+                className="font-bold text-xs px-4 py-2 rounded-sm transition-all duration-200 flex items-center gap-1.5 border border-amber-500 bg-amber-500 text-white hover:bg-amber-600 hover:border-amber-600 active:scale-95 shadow-sm shadow-amber-500/10 dark:bg-amber-600 dark:border-amber-600 dark:hover:bg-amber-700 dark:hover:border-amber-700"
               >
-                <img src="/icons/donate/throne.png" alt="" className="w-4 h-4 object-contain" />
-                Ủng Hộ
+                <ViconicIcon name="b3:cup-hot-fill" size={13} className="shrink-0" />
+                Donate
               </button>
             </div>
 
@@ -1760,6 +1774,13 @@ const DetailPage: React.FC = () => {
         onClose={() => setShowDonateModal(false)}
         onSuccess={(newBalance) => {
           setBalance(newBalance);
+          try {
+            const u = JSON.parse(localStorage.getItem('user') || '{}');
+            if (u && u.name) {
+              u.coin_balance = newBalance;
+              localStorage.setItem('user', JSON.stringify(u));
+            }
+          } catch (e) {}
           window.dispatchEvent(new Event('balance-updated'));
         }}
       />

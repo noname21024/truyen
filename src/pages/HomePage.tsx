@@ -466,14 +466,13 @@ const HomePage: React.FC = () => {
             {finalHotNovels.map((novel) => (
               <SwiperSlide key={novel.id} className="relative w-full h-full flex items-center justify-center">
                 {/* Background with blur / overlay */}
-                <div className="absolute inset-0 z-0 select-none pointer-events-none">
+                <div className="absolute inset-0 z-0 select-none pointer-events-none overflow-hidden">
                   <img 
                     alt={novel.title} 
-                    className="w-full h-full object-cover opacity-[0.45] dark:opacity-[0.25] scale-105 blur-[3px]" 
+                    className="w-full h-full object-cover opacity-95 dark:opacity-80 scale-110 blur-md" 
                     src={novel.banner} 
                   />
-                  <div className="absolute inset-0 bg-gradient-to-r from-surface via-surface/75 to-transparent dark:from-slate-950 dark:via-slate-950/75 dark:to-transparent"></div>
-                  <div className="absolute inset-0 bg-gradient-to-t from-surface via-transparent to-transparent"></div>
+                  <div className="absolute inset-0 bg-gradient-to-r from-surface via-surface/80 to-transparent dark:from-slate-950 dark:via-slate-950/80 dark:to-transparent"></div>
                 </div>
 
                 {/* Slide Content */}
