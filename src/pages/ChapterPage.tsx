@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 import novelsDataJson from '@/data/novelsIndex.json';
-import { incrementNovelView } from '@/lib/viewCountService';
 import ViconicIcon from '@/components/ui/ViconicIcon';
 import { NovelService, ChapterService, CoinService, CommentService } from '@/lib/api';
 import { isUserVIP } from '@/lib/user';
@@ -47,11 +46,13 @@ if (typeof window !== 'undefined' && (window as any).XMLHttpRequest) {
   }
 }
 
-const R2_BASE = 'https://pub-71585e468cd741989c43b01356ee9591.r2.dev';
+const R2_BASE = 'https://cdn.pubnihtruyen.com';
 
 // Register Ngọc Huyền model — loaded from R2 at runtime, not bundled
+// PATH_MAP expects a relative path (appended to HF_BASE), so we use a placeholder path
+// and intercept the resulting HuggingFace fetch to redirect to our CDN instead
 if (typeof window !== 'undefined') {
-  (PATH_MAP as any)['vi_VN-ngoc_huyen'] = `${R2_BASE}/audio_model/ngoc_huyen.onnx`;
+  (PATH_MAP as any)['vi_VN-ngoc_huyen'] = 'vi/vi_VN/ngoc_huyen/medium/vi_VN-ngoc_huyen.onnx';
 
   // Configure onnxruntime-web to load WASM from R2 instead of bundled assets
   // @ts-ignore
@@ -59,14 +60,14 @@ if (typeof window !== 'undefined') {
     ort.env.wasm.wasmPaths = `${R2_BASE}/wasm/`;
   }).catch(() => {});
 
-  // Redirect Hugging Face CDN requests to R2
+  // Redirect Hugging Face CDN requests to R2/CDN for ngoc_huyen model
   const originalFetch = window.fetch;
   window.fetch = async function (input, init) {
     const url = typeof input === 'string' ? input : (input as Request).url || '';
-    if (url.includes('diffusionstudio/piper-voices/resolve/main/ngoc_huyen.onnx.json')) {
+    if (url.includes('huggingface.co') && url.includes('ngoc_huyen.onnx.json')) {
       return originalFetch(`${R2_BASE}/audio_model/ngoc_huyen.onnx.json`, init);
     }
-    if (url.includes('diffusionstudio/piper-voices/resolve/main/ngoc_huyen.onnx')) {
+    if (url.includes('huggingface.co') && url.includes('ngoc_huyen.onnx')) {
       return originalFetch(`${R2_BASE}/audio_model/ngoc_huyen.onnx`, init);
     }
     return originalFetch(input, init);
@@ -76,6 +77,7 @@ if (typeof window !== 'undefined') {
 // Persistent module-level cache for TTS Session and Loader Promise to prevent reloading across chapters
 let globalTtsSession: any = null;
 let globalTtsSessionPromise: Promise<any> | null = null;
+let lookaheadCache: Map<number, Promise<Blob>> = new Map();
 
 const novelsData = novelsDataJson as any[];
 
@@ -154,13 +156,18 @@ const renderCommentContentHtml = (text: string): string => {
 };
 
 
-const ChapterPage: React.FC = () => {
-  const { novelId, chapterIndex } = useParams<{ novelId: string; chapterIndex: string }>();
-  const navigate = useNavigate();
-  const [novel, setNovel] = useState<any | null>(null);
-  const currentIndex = parseInt(chapterIndex || '1', 10);
+type TocEntry = { id: number; chapter_number: number; title: string };
 
-  const [toc, setToc] = useState<string[]>([]);
+const ChapterPage: React.FC = () => {
+  const { chapterId } = useParams<{ chapterId: string }>();
+  const navigate = useNavigate();
+  const { state: routeState } = useLocation();
+  const [novel, setNovel] = useState<any | null>(null);
+  const [novelLoading, setNovelLoading] = useState(true);
+  const [storySlug, setStorySlug] = useState<string>((routeState as any)?.storySlug || '');
+  const [currentChapterNumber, setCurrentChapterNumber] = useState(0);
+
+  const [toc, setToc] = useState<TocEntry[]>([]);
   const [chapterData, setChapterData] = useState<{ title: string; content: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -259,12 +266,16 @@ const ChapterPage: React.FC = () => {
       // End of chapter
       ttsPlayingRef.current = false;
       setIsTtsPlaying(false);
+      lookaheadCache.clear();
       return;
     }
 
     setCurrentSentenceIndex(index);
     currentSentenceRef.current = index;
-    setIsTtsLoading(true);
+    const audioAlreadyCached = lookaheadCache.has(index);
+    if (!audioAlreadyCached) {
+      setIsTtsLoading(true);
+    }
     setIsTtsPlaying(true);
     ttsPlayingRef.current = true;
     setTtsError(null);
@@ -275,7 +286,26 @@ const ChapterPage: React.FC = () => {
         () => setIsModelLoading(false)
       );
 
-      const wavBlob = await session.predict(sentencesInfo[index].text);
+      // Use cached prediction if available, otherwise start one now
+      if (!lookaheadCache.has(index)) {
+        lookaheadCache.set(index, session.predict(sentencesInfo[index].text));
+      }
+
+      // Pre-convert next 2 sentences in background while this one loads/plays
+      for (let ahead = 1; ahead <= 2; ahead++) {
+        const ni = index + ahead;
+        if (ni < sentencesInfo.length && !lookaheadCache.has(ni)) {
+          lookaheadCache.set(ni, session.predict(sentencesInfo[ni].text));
+        }
+      }
+
+      let wavBlob: Blob;
+      try {
+        wavBlob = await lookaheadCache.get(index)!;
+      } catch (e) {
+        lookaheadCache.delete(index);
+        throw e;
+      }
 
       // Check if user stopped while we were converting
       if (!ttsPlayingRef.current) return;
@@ -339,6 +369,7 @@ const ChapterPage: React.FC = () => {
 
   const stopTts = () => {
     ttsPlayingRef.current = false;
+    lookaheadCache.clear();
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.removeAttribute('src');
@@ -392,8 +423,8 @@ const ChapterPage: React.FC = () => {
 
   // Fetch unlocked chapters + VIP status when this is a VIP novel and user is logged in
   useEffect(() => {
-    if (novel?.is_vip && currentUser && novelId) {
-      CoinService.getUnlockedChapters(novelId)
+    if (novel?.is_vip && currentUser && storySlug) {
+      CoinService.getUnlockedChapters(storySlug)
         .then(data => {
           setUnlockedChapters(data.unlocked_chapters);
           setIsVIPMember(data.is_vip);
@@ -402,7 +433,7 @@ const ChapterPage: React.FC = () => {
         })
         .catch(() => {});
     }
-  }, [novel?.is_vip, currentUser, novelId]);
+  }, [novel?.is_vip, currentUser, storySlug]);
 
   // Sync coin balance from localStorage on mount
   useEffect(() => {
@@ -412,14 +443,18 @@ const ChapterPage: React.FC = () => {
     } catch {}
   }, [currentUser]);
 
-  const isLocked = novel?.is_vip && currentIndex > freeUpTo && !isVIPMember && !unlockedChapters.includes(currentIndex);
+  const isLocked = novel?.is_vip && currentChapterNumber > freeUpTo && !isVIPMember && !unlockedChapters.includes(currentChapterNumber);
+
+  const curTocIdx = toc.findIndex(c => c.chapter_number === currentChapterNumber);
+  const prevEntry = curTocIdx > 0 ? toc[curTocIdx - 1] : null;
+  const nextEntry = curTocIdx >= 0 && curTocIdx < toc.length - 1 ? toc[curTocIdx + 1] : null;
 
   const handleUnlock = async () => {
     if (!currentChapterId || isUnlocking) return;
     setIsUnlocking(true);
     try {
       const result = await CoinService.unlockChapter(currentChapterId);
-      setUnlockedChapters(prev => [...prev, currentIndex]);
+      setUnlockedChapters(prev => [...prev, currentChapterNumber]);
       setCoinBalance(result.coin_balance);
       try {
         const u = JSON.parse(localStorage.getItem('user') || '{}');
@@ -461,9 +496,9 @@ const ChapterPage: React.FC = () => {
     // Persist report to localStorage
     const newReport = {
       id: Date.now(),
-      novelId,
-      chapterIndex: currentIndex,
-      chapterTitle: chapterData?.title || `Chương ${currentIndex}`,
+      novelId: storySlug,
+      chapterIndex: currentChapterNumber,
+      chapterTitle: chapterData?.title || `Chương ${currentChapterNumber}`,
       user: currentUser.name,
       errorName: reportErrorName.trim(),
       errorMessage: reportErrorMessage.trim(),
@@ -818,116 +853,82 @@ const ChapterPage: React.FC = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable) return;
-
+      const curIdx = toc.findIndex(c => c.chapter_number === currentChapterNumber);
       if (e.key === 'ArrowRight') {
-        if (toc.length === 0 || currentIndex < toc.length) {
-          navigate(`/chapter/${novelId}/${currentIndex + 1}`);
-        }
+        const next = curIdx >= 0 && curIdx < toc.length - 1 ? toc[curIdx + 1] : null;
+        if (next) navigate(`/chapter/${next.id}`, { state: { storySlug } });
       } else if (e.key === 'ArrowLeft') {
-        if (currentIndex > 1) {
-          navigate(`/chapter/${novelId}/${currentIndex - 1}`);
-        }
+        const prev = curIdx > 0 ? toc[curIdx - 1] : null;
+        if (prev) navigate(`/chapter/${prev.id}`, { state: { storySlug } });
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentIndex, novelId, toc.length, navigate]);
+  }, [currentChapterNumber, storySlug, toc, navigate]);
 
-  // Load novel metadata and TOC
+  // Load novel metadata and TOC (runs when storySlug becomes known from chapter response or route state)
   useEffect(() => {
-    if (novelId) {
-      NovelService.getNovelDetail(novelId)
-        .then(data => {
-          const mapped = {
-            id: data.slug,
-            slug: data.slug,
-            title: data.title,
-            cover: data.cover_url,
-            folder: data.slug,
-            is_vip: data.is_vip,
-          };
-          setNovel(mapped);
-          if (data.chapters && data.chapters.length > 0) {
-            setToc(data.chapters.map((c: any) => c.title));
-          }
-        })
-        .catch(err => {
-          console.error("Failed to load novel detail from API", err);
-          // Fallback to static
-          const staticNovel = novelsData.find(n => n.id === novelId);
-          if (staticNovel) {
-            setNovel(staticNovel);
-            fetch(`/data/${encodeURIComponent(staticNovel.folder)}/toc.json`)
-              .then(res => res.json())
-              .then(tocData => setToc(tocData))
-              .catch(() => { });
-          }
+    if (!storySlug) return;
+    setNovelLoading(true);
+    NovelService.getNovelDetail(storySlug)
+      .then(data => {
+        setNovel({
+          id: data.slug,
+          slug: data.slug,
+          title: data.title,
+          cover: data.cover_url,
+          folder: data.slug,
+          is_vip: data.is_vip,
         });
-    }
-  }, [novelId]);
+        if (data.toc && data.toc.length > 0) {
+          setToc(data.toc);
+        }
+      })
+      .catch(err => {
+        console.error("Failed to load novel detail from API", err);
+        const staticNovel = novelsData.find((n: any) => n.id === storySlug);
+        if (staticNovel) {
+          setNovel(staticNovel);
+          fetch(`/data/${encodeURIComponent(staticNovel.folder)}/toc.json`)
+            .then(res => res.json())
+            .then((tocData: string[]) => setToc(tocData.map((title, idx) => ({ id: idx + 1, chapter_number: idx + 1, title }))))
+            .catch(() => {});
+        }
+      })
+      .finally(() => setNovelLoading(false));
+  }, [storySlug]);
 
   // Load chapter content
   useEffect(() => {
-    if (novelId && currentIndex) {
-      setLoading(true);
+    if (!chapterId) return;
+    setLoading(true);
+    stopTts();
 
-      // Stop and reset audio playback for the new chapter
-      stopTts();
-
-      ChapterService.getChapterByNumber(novelId, currentIndex)
-        .then(chap => {
-          if (chap) {
-            setCurrentChapterId(chap.id);
-            ChapterService.getChapterContent(chap.id)
-              .then(data => {
-                setChapterData(data);
-                setLoading(false);
-                window.scrollTo(0, 0);
-
-                // Increment chapter views count on backend database on every load
-                const incrementKey = `${novelId}_${currentIndex}`;
-                if (incrementedRef.current !== incrementKey) {
-                  incrementedRef.current = incrementKey;
-                  ChapterService.incrementViews(chap.id).catch(() => { });
-                }
-              })
-              .catch(err => {
-                console.warn("Failed to fetch chapter content from proxy, attempting fallback", err);
-                fallbackLoad();
-              });
-          } else {
-            fallbackLoad();
-          }
-        })
-        .catch(err => {
-          console.warn("Failed to query chapter from API, attempting fallback", err);
-          fallbackLoad();
-        });
-    }
-
-    function fallbackLoad() {
-      // Find static folder from static list as fallback
-      const staticNovel = novelsData.find(n => n.id === novelId);
-      const folder = staticNovel ? staticNovel.folder : novelId;
-      if (novelId) incrementNovelView(novelId);
-
-      fetch(`/data/${encodeURIComponent(folder)}/chapters/chapter${currentIndex}.json`)
-        .then(res => res.json())
-        .then(data => {
-          setChapterData(data);
-          setLoading(false);
-          window.scrollTo(0, 0);
-        })
-        .catch(err => {
-          console.error("Failed to load chapter static fallback", err);
-          setLoading(false);
-        });
-    }
-  }, [novelId, currentIndex]);
+    ChapterService.getChapterDetail(chapterId)
+      .then(chap => {
+        setCurrentChapterId(chap.id);
+        setCurrentChapterNumber(chap.chapter_number);
+        if (chap.story_slug) setStorySlug(chap.story_slug);
+        return ChapterService.getChapterContent(chap.id);
+      })
+      .then(data => {
+        setChapterData(data);
+        setLoading(false);
+        window.scrollTo(0, 0);
+        if (incrementedRef.current !== chapterId) {
+          incrementedRef.current = chapterId;
+          ChapterService.incrementViews(chapterId).catch(() => {});
+        }
+      })
+      .catch(err => {
+        console.warn("Failed to load chapter from API", err);
+        setLoading(false);
+      });
+  }, [chapterId]);
 
   const parsedTitle = useMemo(() => {
-    const fullTitle = chapterData?.title || `Chương ${currentIndex}`;
+    const fullTitle = chapterData?.title || (currentChapterNumber ? `Chương ${currentChapterNumber}` : '');
     const colonIndex = fullTitle.indexOf(':');
     if (colonIndex > 0) {
       const num = fullTitle.substring(0, colonIndex).trim();
@@ -935,40 +936,39 @@ const ChapterPage: React.FC = () => {
       return { num, name };
     }
     return { num: '', name: fullTitle };
-  }, [chapterData, currentIndex]);
+  }, [chapterData, currentChapterNumber]);
 
   // Save viewed chapter to reading history list
   useEffect(() => {
-    if (!novelId || !currentIndex || !chapterData?.title) return;
+    if (!storySlug || !currentChapterNumber || !chapterData?.title) return;
     try {
       const historyStr = localStorage.getItem('reading_history_list') || '[]';
       const history = JSON.parse(historyStr) as any[];
-      // Filter out duplicate chapters of the same novel
-      const filtered = history.filter((item: any) => item.novelId !== novelId);
-      
+      const filtered = history.filter((item: any) => item.novelId !== storySlug);
+
       let novelTitle = novel?.title;
       if (!novelTitle) {
-        const staticNovel = novelsData.find(n => n.id === novelId);
-        novelTitle = staticNovel?.title || novelId;
+        const staticNovel = novelsData.find((n: any) => n.id === storySlug);
+        novelTitle = staticNovel?.title || storySlug;
       }
-      
+
       const newItem = {
-        novelId,
+        novelId: storySlug,
         novelTitle,
-        chapterNumber: currentIndex,
+        chapterNumber: currentChapterNumber,
         chapterTitle: chapterData.title,
         timestamp: new Date().toISOString()
       };
-      
+
       const updated = [newItem, ...filtered].slice(0, 30);
       localStorage.setItem('reading_history_list', JSON.stringify(updated));
-      localStorage.setItem(`reading_progress_${novelId}`, currentIndex.toString());
+      localStorage.setItem(`reading_progress_${storySlug}`, currentChapterNumber.toString());
     } catch (e) {
       console.error("Failed to save reading history list:", e);
     }
-  }, [novelId, currentIndex, chapterData?.title, novel?.title]);
+  }, [storySlug, currentChapterNumber, chapterData?.title, novel?.title]);
 
-  if (!novel && !loading) {
+  if (!novel && !loading && !novelLoading) {
     return (
       <div className="pt-20 pb-12 px-6 text-center text-on-surface">
         <h1 className="font-display-lg text-xl md:text-2xl mb-4">Truyện không tồn tại</h1>
@@ -1064,7 +1064,7 @@ const ChapterPage: React.FC = () => {
             </li>
             <li aria-current="page" className="shrink-0 min-w-0 flex items-center">
               <ViconicIcon name="chevron_right" size={14} className="mx-1 opacity-50 shrink-0" />
-              <span className="font-bold truncate">Chương {currentIndex}</span>
+              <span className="font-bold truncate">Chương {currentChapterNumber}</span>
             </li>
           </ol>
         </nav>
@@ -1081,7 +1081,7 @@ const ChapterPage: React.FC = () => {
             <>
               <div className="flex items-center gap-2 mb-3">
                 <Link
-                  to={`/detail/${novelId}`}
+                  to={`/detail/${storySlug}`}
                   className="hover:text-primary transition-colors text-xs font-bold opacity-60 tracking-wider"
                 >
                   {novel?.title}
@@ -1171,8 +1171,8 @@ const ChapterPage: React.FC = () => {
                 >
                   <div className="flex items-center space-x-1.5 truncate mr-1.5">
                     <ViconicIcon name="list" size={14} className="shrink-0" />
-                    <span className="truncate select-none hidden sm:inline">{chapterData?.title || `Chương ${currentIndex}`}</span>
-                    <span className="truncate select-none sm:hidden">Chương {currentIndex}</span>
+                    <span className="truncate select-none hidden sm:inline">{chapterData?.title || `Chương ${currentChapterNumber}`}</span>
+                    <span className="truncate select-none sm:hidden">Chương {currentChapterNumber}</span>
                   </div>
                   <ViconicIcon name="arrow_drop_down" size={16} className="shrink-0" />
                 </button>
@@ -1180,17 +1180,17 @@ const ChapterPage: React.FC = () => {
                 {isDropdownOpen && (
                   <div className={`absolute top-full left-0 w-full mt-2 max-h-[50vh] overflow-y-auto ${theme === 'dark' ? 'bg-[#1C1D21] text-[#C5C8CE] border-[#282B30]' : 'bg-white text-slate-800 border-slate-200'
                     } border shadow-xl rounded-md z-50 flex flex-col overscroll-contain`}>
-                    {toc.map((title, idx) => (
+                    {toc.map((entry, idx) => (
                       <button
                         key={idx}
                         onClick={() => {
                           setIsDropdownOpen(false);
-                          navigate(`/chapter/${novelId}/${idx + 1}`);
+                          navigate(`/chapter/${entry.id}`, { state: { storySlug } });
                         }}
                         className={`text-left px-4 py-2.5 hover:bg-primary/5 transition-colors border-b last:border-b-0 text-xs ${theme === 'dark' ? 'border-[#282B30]' : 'border-slate-100'
-                          } ${idx + 1 === currentIndex ? 'font-bold text-primary bg-primary/5 border-l-2 border-l-primary' : 'border-l-2 border-l-transparent'}`}
+                          } ${entry.chapter_number === currentChapterNumber ? 'font-bold text-primary bg-primary/5 border-l-2 border-l-primary' : 'border-l-2 border-l-transparent'}`}
                       >
-                        {title}
+                        {entry.title}
                       </button>
                     ))}
                     {toc.length === 0 && (
@@ -1280,16 +1280,16 @@ const ChapterPage: React.FC = () => {
                   <button onClick={() => setIsDropdownOpen(!isDropdownOpen)} className={`flex items-center space-x-1 px-3 py-2 sm:space-x-1.5 sm:px-4.5 sm:py-2.5 rounded-sm transition-all font-bold text-xs ${currentTheme.buttonBg} border ${currentTheme.border} shadow-sm w-full justify-between`}>
                     <div className="flex items-center space-x-1.5 truncate mr-1.5">
                       <ViconicIcon name="list" size={14} className="shrink-0" />
-                      <span className="truncate select-none hidden sm:inline">{chapterData?.title || `Chương ${currentIndex}`}</span>
-                      <span className="truncate select-none sm:hidden">Chương {currentIndex}</span>
+                      <span className="truncate select-none hidden sm:inline">{chapterData?.title || `Chương ${currentChapterNumber}`}</span>
+                      <span className="truncate select-none sm:hidden">Chương {currentChapterNumber}</span>
                     </div>
                     <ViconicIcon name="arrow_drop_down" size={16} className="shrink-0" />
                   </button>
                   {isDropdownOpen && (
                     <div className={`absolute top-full left-0 w-full mt-2 max-h-[50vh] overflow-y-auto ${theme === 'dark' ? 'bg-[#1C1D21] text-[#C5C8CE] border-[#282B30]' : 'bg-white text-slate-800 border-slate-200'} border shadow-xl rounded-md z-50 flex flex-col overscroll-contain`}>
-                      {toc.map((title, idx) => (
-                        <button key={idx} onClick={() => { setIsDropdownOpen(false); navigate(`/chapter/${novelId}/${idx + 1}`); }} className={`text-left px-4 py-2.5 hover:bg-primary/5 transition-colors border-b last:border-b-0 text-xs ${theme === 'dark' ? 'border-[#282B30]' : 'border-slate-100'} ${idx + 1 === currentIndex ? 'font-bold text-primary bg-primary/5 border-l-2 border-l-primary' : 'border-l-2 border-l-transparent'}`}>
-                          {title}
+                      {toc.map((entry, idx) => (
+                        <button key={idx} onClick={() => { setIsDropdownOpen(false); navigate(`/chapter/${entry.id}`, { state: { storySlug } }); }} className={`text-left px-4 py-2.5 hover:bg-primary/5 transition-colors border-b last:border-b-0 text-xs ${theme === 'dark' ? 'border-[#282B30]' : 'border-slate-100'} ${entry.chapter_number === currentChapterNumber ? 'font-bold text-primary bg-primary/5 border-l-2 border-l-primary' : 'border-l-2 border-l-transparent'}`}>
+                          {entry.title}
                         </button>
                       ))}
                       {toc.length === 0 && (<div className="px-4 py-3 text-xs text-center opacity-70">Không có dữ liệu</div>)}
@@ -1355,7 +1355,7 @@ const ChapterPage: React.FC = () => {
               <div className="text-center">
                 <span className="inline-block mb-2 text-[10px] font-black uppercase tracking-widest text-primary px-3 py-1 bg-primary/10 rounded-full">VIP</span>
                 <h3 className="font-bold text-lg mb-1">Chương khóa</h3>
-                <p className="text-sm opacity-60">Chương {currentIndex} chỉ dành cho độc giả VIP.</p>
+                <p className="text-sm opacity-60">Chương {currentChapterNumber} chỉ dành cho độc giả VIP.</p>
               </div>
               {currentUser ? (
                 <div className="flex flex-col items-center gap-4 w-full max-w-xs">
@@ -1428,8 +1428,8 @@ const ChapterPage: React.FC = () => {
         {/* Footer Navigation Buttons */}
         <div className="flex justify-between items-center mb-10 gap-2">
           <button
-            onClick={() => navigate(`/chapter/${novelId}/${currentIndex - 1}`)}
-            disabled={currentIndex <= 1}
+            onClick={() => prevEntry && navigate(`/chapter/${prevEntry.id}`, { state: { storySlug } })}
+            disabled={!prevEntry}
             className={`flex items-center px-3 py-2.5 sm:px-5 sm:py-2.5 border rounded-sm font-bold text-xs transition-all ${currentTheme.buttonBg} ${currentTheme.border} disabled:opacity-30 disabled:cursor-not-allowed`}
           >
             <ViconicIcon name="arrow_back" size={14} className="sm:mr-1.5 shrink-0" />
@@ -1438,7 +1438,7 @@ const ChapterPage: React.FC = () => {
 
           <div className="flex items-center gap-2">
             <Link
-              to={`/detail/${novelId}`}
+              to={`/detail/${storySlug}`}
               className={`flex items-center px-3 py-2.5 sm:px-4 sm:py-2.5 border rounded-sm font-bold text-xs transition-all ${currentTheme.buttonBg} ${currentTheme.border}`}
               title="Quay lại chi tiết truyện"
             >
@@ -1456,8 +1456,8 @@ const ChapterPage: React.FC = () => {
           </div>
 
           <button
-            onClick={() => navigate(`/chapter/${novelId}/${currentIndex + 1}`)}
-            disabled={toc.length > 0 && currentIndex >= toc.length}
+            onClick={() => nextEntry && navigate(`/chapter/${nextEntry.id}`, { state: { storySlug } })}
+            disabled={!nextEntry}
             className={`flex items-center px-3 py-2.5 sm:px-5 sm:py-2.5 bg-primary text-on-primary rounded-sm font-bold text-xs transition-all hover:bg-primary/95 disabled:opacity-30 disabled:cursor-not-allowed shadow-md shadow-primary/10`}
           >
             <span className="hidden sm:inline">Chương sau</span>
@@ -2012,10 +2012,9 @@ const ChapterPage: React.FC = () => {
               {/* Skip Previous Button */}
               <button
                 onClick={() => {
-                  localStorage.setItem('tts-autoplay', 'true');
-                  navigate(`/chapter/${novelId}/${currentIndex - 1}`);
+                  if (prevEntry) { localStorage.setItem('tts-autoplay', 'true'); navigate(`/chapter/${prevEntry.id}`, { state: { storySlug } }); }
                 }}
-                disabled={currentIndex <= 1}
+                disabled={!prevEntry}
                 className="p-1.5 rounded-full hover:bg-current/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-primary flex items-center justify-center"
                 title="Chương trước"
               >
@@ -2038,10 +2037,9 @@ const ChapterPage: React.FC = () => {
               {/* Skip Next Button */}
               <button
                 onClick={() => {
-                  localStorage.setItem('tts-autoplay', 'true');
-                  navigate(`/chapter/${novelId}/${currentIndex + 1}`);
+                  if (nextEntry) { localStorage.setItem('tts-autoplay', 'true'); navigate(`/chapter/${nextEntry.id}`, { state: { storySlug } }); }
                 }}
-                disabled={toc.length > 0 && currentIndex >= toc.length}
+                disabled={!nextEntry}
                 className="p-1.5 rounded-full hover:bg-current/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-primary flex items-center justify-center"
                 title="Chương sau"
               >

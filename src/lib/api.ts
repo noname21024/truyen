@@ -1,6 +1,17 @@
 import axios from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/';
+const R2_BASE = 'https://pub-71585e468cd741989c43b01356ee9591.r2.dev';
+export const CDN_BASE = 'https://cdn.pubnihtruyen.com';
+
+function replaceR2(obj: unknown): unknown {
+  if (typeof obj === 'string') return obj.replace(R2_BASE, CDN_BASE);
+  if (Array.isArray(obj)) return obj.map(replaceR2);
+  if (obj && typeof obj === 'object') {
+    return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, replaceR2(v)]));
+  }
+  return obj;
+}
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -15,6 +26,11 @@ api.interceptors.request.use(config => {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
+});
+
+api.interceptors.response.use(response => {
+  response.data = replaceR2(response.data);
+  return response;
 });
 
 // TypeScript interfaces matching the Django serializers
@@ -45,6 +61,7 @@ export interface ChapterSummary {
 export interface ChapterDetail {
   id: number;
   story: number;
+  story_slug: string;
   story_title: string;
   title: string;
   chapter_number: number;
@@ -72,6 +89,19 @@ export interface NovelSummary {
   description?: string;
 }
 
+export interface ChapterToc {
+  id: number;
+  chapter_number: number;
+  title: string;
+}
+
+export interface PaginatedChapters {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: ChapterSummary[];
+}
+
 export interface NovelDetail {
   id: number;
   title: string;
@@ -88,7 +118,7 @@ export interface NovelDetail {
   follow_count: number;
   created_at: string;
   updated_at: string;
-  chapters: ChapterSummary[];
+  toc: ChapterToc[];
 }
 
 // Novel API services
@@ -118,11 +148,33 @@ export const NovelService = {
 
 // Chapter API services
 export const ChapterService = {
-  // Get list of chapters for a novel slug
+  // Get list of chapters for a novel slug (legacy, no pagination)
   getChapters: async (novelSlug: string) => {
     const response = await api.get<ChapterSummary[]>('chapters/', {
       params: { story: novelSlug },
     });
+    return response.data;
+  },
+
+  // Get paginated chapters — used by DetailPage for lazy loading
+  getChaptersPaginated: async (novelSlug: string, params?: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    ordering?: string;
+  }): Promise<PaginatedChapters> => {
+    const response = await api.get<PaginatedChapters | ChapterSummary[]>('chapters/', {
+      params: {
+        story: novelSlug,
+        page: params?.page ?? 1,
+        page_size: params?.pageSize ?? 100,
+        ...(params?.search ? { search: params.search } : {}),
+        ordering: params?.ordering ?? 'chapter_number',
+      },
+    });
+    if (Array.isArray(response.data)) {
+      return { count: response.data.length, next: null, previous: null, results: response.data };
+    }
     return response.data;
   },
 
@@ -313,6 +365,7 @@ export interface NotificationData {
     sticker_urls?: string[];
     story_slug?: string;
     story_title?: string;
+    chapter_id?: number;
     chapter_number?: number;
     comment_id?: number;
   };

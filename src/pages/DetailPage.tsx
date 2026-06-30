@@ -5,7 +5,7 @@ import novelsDataJson from '@/data/novelsIndex.json';
 const novelsData = novelsDataJson as any[];
 import { getNovelViews } from '@/lib/viewCountService';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { NovelService, CoinService, CommentService, type StoryPriceInfo, type ChapterCommentData } from '@/lib/api';
+import { NovelService, ChapterService, CoinService, CommentService, type StoryPriceInfo, type ChapterCommentData } from '@/lib/api';
 import DonateModal from '@/components/DonateModal';
 import { isUserVIP } from '@/lib/user';
 import { STICKER_SETS } from '@/data/stickers';
@@ -78,6 +78,11 @@ const DetailPage: React.FC = () => {
   const [balance, setBalance] = useState<number>(0);
   const [chapterSearchQuery, setChapterSearchQuery] = useState('');
   const [chapterSortOrder, setChapterSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [chaptersPage, setChaptersPage] = useState(1);
+  const [hasMoreChapters, setHasMoreChapters] = useState(false);
+  const [chaptersLoadingMore, setChaptersLoadingMore] = useState(false);
+  const [chaptersTotalCount, setChaptersTotalCount] = useState(0);
+  const chapterFetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [lastReadChapter, setLastReadChapter] = useState<string | null>(null);
 
   useEffect(() => {
@@ -88,30 +93,16 @@ const DetailPage: React.FC = () => {
   }, [novel?.slug]);
 
   const processedChapters = React.useMemo(() => {
-    let list = [...chapters];
-    if (list.length === 0 && novel?.chapter_count) {
-      list = Array.from({ length: novel.chapter_count }).map((_, idx) => ({
+    if (chapters.length === 0 && novel?.chapter_count && !chaptersLoadingMore) {
+      return Array.from({ length: novel.chapter_count }).map((_, idx) => ({
         id: idx + 1,
         chapter_number: idx + 1,
         title: `Chương ${idx + 1}`,
         published_at: novel.update_time
       }));
     }
-    if (chapterSortOrder === 'asc') {
-      list.sort((a, b) => a.chapter_number - b.chapter_number);
-    } else {
-      list.sort((a, b) => b.chapter_number - a.chapter_number);
-    }
-    if (chapterSearchQuery.trim()) {
-      const q = chapterSearchQuery.toLowerCase();
-      list = list.filter(chap => 
-        chap.title.toLowerCase().includes(q) || 
-        `Chương ${chap.chapter_number}`.toLowerCase().includes(q) ||
-        chap.chapter_number.toString() === q.trim()
-      );
-    }
-    return list;
-  }, [chapters, novel?.chapter_count, novel?.update_time, chapterSortOrder, chapterSearchQuery]);
+    return chapters;
+  }, [chapters, novel?.chapter_count, novel?.update_time, chaptersLoadingMore]);
 
   // Load balance for purchasing locked chapters
   useEffect(() => {
@@ -252,13 +243,6 @@ const DetailPage: React.FC = () => {
     NovelService.getNovels()
       .then(data => {
         let mapped: any[] = [];
-        const mockCovers = [
-          "https://images.unsplash.com/photo-1543002588-bfa74002ed7e?w=120&auto=format&fit=crop&q=80",
-          "https://images.unsplash.com/photo-1532012197267-da84d127e765?w=120&auto=format&fit=crop&q=80",
-          "https://images.unsplash.com/photo-1512820790803-83ca734da794?w=120&auto=format&fit=crop&q=80",
-          "https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=120&auto=format&fit=crop&q=80",
-          "https://images.unsplash.com/photo-1506880018603-83d5b814b5a6?w=120&auto=format&fit=crop&q=80",
-        ];
 
         if (data && Array.isArray(data)) {
           mapped = data.map((novel: any) => ({
@@ -277,68 +261,18 @@ const DetailPage: React.FC = () => {
           }));
         }
 
-        // Fill with mock novels if less than 5 to make it match the ranking page
-        if (mapped.length < 5) {
-          const mockTitles = [
-            "Kiếm Lai",
-            "Đấu Phá Thương Khung",
-            "Vũ Động Càn Khôn",
-            "Thần Khống Thiên Hạ",
-            "Phàm Nhân Tu Tiên",
-          ];
-          const needed = 5 - mapped.length;
-          for (let i = 0; i < needed; i++) {
-            const baseViews = 150000 - i * 14000;
-            mapped.push({
-              id: `mock-slug-${i}`,
-              title: mockTitles[i],
-              views: baseViews,
-              cover: mockCovers[i],
-            });
-          }
-        }
-
         // Sort by views descending and take top 5
         mapped.sort((a, b) => b.views - a.views);
         setHotRanking(mapped.slice(0, 5));
       })
       .catch(err => {
-        console.warn("Failed to load hot ranking from API, using static fallbacks:", err);
-        const mockCovers = [
-          "https://images.unsplash.com/photo-1543002588-bfa74002ed7e?w=120&auto=format&fit=crop&q=80",
-          "https://images.unsplash.com/photo-1532012197267-da84d127e765?w=120&auto=format&fit=crop&q=80",
-          "https://images.unsplash.com/photo-1512820790803-83ca734da794?w=120&auto=format&fit=crop&q=80",
-          "https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=120&auto=format&fit=crop&q=80",
-          "https://images.unsplash.com/photo-1506880018603-83d5b814b5a6?w=120&auto=format&fit=crop&q=80",
-        ];
-        // Fallback to static novelsData
+        console.warn("Failed to load hot ranking from API:", err);
         const fallbackList = novelsData.map((novel: any) => ({
           id: novel.id,
           title: novel.title,
           views: getNovelViews(novel.id),
           cover: novel.cover || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
         }));
-
-        if (fallbackList.length < 5) {
-          const mockTitles = [
-            "Kiếm Lai",
-            "Đấu Phá Thương Khung",
-            "Vũ Động Càn Khôn",
-            "Thần Khống Thiên Hạ",
-            "Phàm Nhân Tu Tiên",
-          ];
-          const needed = 5 - fallbackList.length;
-          for (let i = 0; i < needed; i++) {
-            const baseViews = 150000 - i * 14000;
-            fallbackList.push({
-              id: `mock-slug-${i}`,
-              title: mockTitles[i],
-              views: baseViews,
-              cover: mockCovers[i],
-            });
-          }
-        }
-
         fallbackList.sort((a: any, b: any) => b.views - a.views);
         setHotRanking(fallbackList.slice(0, 5));
       });
@@ -583,13 +517,13 @@ const DetailPage: React.FC = () => {
             background_thumbnail_url: data.background_thumbnail_url,
             intro: data.description || "Đang cập nhật nội dung tóm tắt.",
             tags: data.genres.map((g: any) => g.name),
-            chapter_count: data.total_chapters || data.chapters?.length || 0,
+            chapter_count: data.total_chapters || 0,
             word_count: 0,
             update_time: data.updated_at,
             is_vip: data.is_vip || false,
+            toc: (data.toc || []) as { id: number; chapter_number: number; title: string }[],
           };
           setNovel(mapped);
-          setChapters(data.chapters || []);
           setLoading(false);
         })
         .catch(err => {
@@ -637,6 +571,55 @@ const DetailPage: React.FC = () => {
   }, [novel?.is_vip, novel?.slug, currentUser]);
 
   const isVIPMember = currentUser ? isUserVIP(currentUser.name) : false;
+
+  // Load chapters from API with pagination; re-runs on sort/search change
+  useEffect(() => {
+    if (!novel?.slug) return;
+    const ordering = chapterSortOrder === 'asc' ? 'chapter_number' : '-chapter_number';
+    const doFetch = () => {
+      setChapters([]);
+      setHasMoreChapters(false);
+      setChaptersLoadingMore(true);
+      ChapterService.getChaptersPaginated(novel.slug, {
+        page: 1,
+        ordering,
+        search: chapterSearchQuery.trim() || undefined,
+      })
+        .then(data => {
+          setChapters(data.results);
+          setChaptersTotalCount(data.count);
+          setHasMoreChapters(!!data.next);
+          setChaptersPage(1);
+        })
+        .catch(() => {})
+        .finally(() => setChaptersLoadingMore(false));
+    };
+    if (chapterFetchRef.current) clearTimeout(chapterFetchRef.current);
+    // Debounce only when search query is active; sort changes are immediate
+    chapterFetchRef.current = setTimeout(doFetch, chapterSearchQuery.trim() ? 300 : 0);
+    return () => {
+      if (chapterFetchRef.current) clearTimeout(chapterFetchRef.current);
+    };
+  }, [novel?.slug, chapterSortOrder, chapterSearchQuery]);
+
+  const handleLoadMoreChapters = async () => {
+    if (!novel?.slug || chaptersLoadingMore || !hasMoreChapters) return;
+    const nextPage = chaptersPage + 1;
+    const ordering = chapterSortOrder === 'asc' ? 'chapter_number' : '-chapter_number';
+    setChaptersLoadingMore(true);
+    try {
+      const data = await ChapterService.getChaptersPaginated(novel.slug, {
+        page: nextPage,
+        ordering,
+        search: chapterSearchQuery.trim() || undefined,
+      });
+      setChapters(prev => [...prev, ...data.results]);
+      setChaptersTotalCount(data.count);
+      setHasMoreChapters(!!data.next);
+      setChaptersPage(nextPage);
+    } catch {}
+    setChaptersLoadingMore(false);
+  };
 
   const handleLockedChapterClick = (chap: any) => {
     if (!currentUser) {
@@ -948,15 +931,17 @@ const DetailPage: React.FC = () => {
           {/* Actions */}
           <div className="flex flex-col gap-3.5 mt-2">
             <div className="flex flex-wrap gap-3">
-              <Link 
-                to={`/chapter/${novel.id}/1`}
+              <Link
+                to={`/chapter/${novel.toc?.[0]?.id ?? ''}`}
+                state={{ storySlug: novel.slug }}
                 className="bg-primary text-on-primary font-bold text-xs px-5 py-2 rounded-sm hover:bg-primary/90 transition-colors flex items-center gap-1.5 active:scale-95 shadow-sm"
               >
                 <ViconicIcon name="menu_book" size={13} className="shrink-0" />
                 Đọc Ngay
               </Link>
-              <Link 
-                to={`/chapter/${novel.id}/${lastReadChapter || '1'}`}
+              <Link
+                to={`/chapter/${(lastReadChapter ? novel.toc?.find((c: any) => c.chapter_number === parseInt(lastReadChapter))?.id : null) ?? novel.toc?.[0]?.id ?? ''}`}
+                state={{ storySlug: novel.slug }}
                 className="bg-secondary text-on-secondary font-bold text-xs px-5 py-2 rounded-sm hover:bg-secondary/90 transition-colors flex items-center gap-1.5 active:scale-95 shadow-sm"
               >
                 <ViconicIcon name="forward" size={13} className="shrink-0" />
@@ -1065,7 +1050,7 @@ const DetailPage: React.FC = () => {
               </button>
 
               <span className="font-bold text-[10px] sm:text-xs text-on-surface-variant bg-surface-variant px-2.5 py-1.5 rounded-sm">
-                {chapters.length > 0 ? chapters.length : novel.chapter_count || 0} Chương
+                {chaptersTotalCount > 0 ? chaptersTotalCount : novel.chapter_count || 0} Chương
               </span>
             </div>
           </div>
@@ -1082,16 +1067,25 @@ const DetailPage: React.FC = () => {
           </div>
 
           <div className="max-h-[420px] overflow-y-auto pr-1 space-y-1.5 no-scrollbar">
-            {processedChapters.length > 0 ? (
+            {chaptersLoadingMore && chapters.length === 0 ? (
+              <div className="space-y-1.5">
+                {[1,2,3,4,5].map(n => (
+                  <div key={n} className="flex justify-between items-center py-2 px-1 animate-pulse">
+                    <div className="h-4 bg-outline-variant/30 rounded w-[60%]" />
+                    <div className="h-3.5 bg-outline-variant/30 rounded w-20" />
+                  </div>
+                ))}
+              </div>
+            ) : processedChapters.length > 0 ? (
               processedChapters.map((chap: any) => {
                 const chapterIndex = chap.chapter_number;
                 const isLocked = novel?.is_vip && chapterIndex > freeUpTo && !isVIPMember && !unlockedChapters.includes(chapterIndex);
 
                 return (
-                  <ChapterItem 
-                    key={chap.id || chap.chapter_number} 
-                    id={`${novel.id}/${chap.chapter_number}`} 
-                    title={chap.title} 
+                  <ChapterItem
+                    key={chap.id || chap.chapter_number}
+                    id={chap.id ? chap.id.toString() : `${novel.id}/${chap.chapter_number}`}
+                    title={chap.title}
                     date={chap.published_at ? new Date(chap.published_at).toLocaleDateString('vi-VN') : "Mới đây"}
                     isLocked={isLocked}
                     onLockedClick={() => handleLockedChapterClick(chap)}
@@ -1100,10 +1094,26 @@ const DetailPage: React.FC = () => {
               })
             ) : (
               <div className="text-center py-10 text-on-surface-variant/80 font-medium text-xs border border-dashed border-outline-variant/40 rounded-sm">
-                Không tìm thấy chương nào phù hợp với bộ lọc tìm kiếm.
+                Không tìm thấy chương nào phù hợp.
               </div>
             )}
           </div>
+          {hasMoreChapters && (
+            <button
+              onClick={handleLoadMoreChapters}
+              disabled={chaptersLoadingMore}
+              className="w-full mt-2 py-2 font-bold text-xs text-primary hover:bg-primary/5 rounded-sm border border-dashed border-outline-variant transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+            >
+              {chaptersLoadingMore ? (
+                <>
+                  <span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  Đang tải...
+                </>
+              ) : (
+                `Tải thêm ${chaptersTotalCount - chapters.length} chương`
+              )}
+            </button>
+          )}
         </section>
       </div>
 
@@ -1716,7 +1726,7 @@ const DetailPage: React.FC = () => {
                 />
                 <div className="flex-grow min-w-0">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <Link to={`/chapter/${id}/${comment.chapter_number}`}>
+                    <Link to={`/chapter/${comment.chapter}`}>
                       <span className="px-1.5 py-0.5 bg-primary/10 text-primary text-[9px] font-black rounded uppercase tracking-wide hover:bg-primary/20 transition-colors cursor-pointer">
                         Chương {comment.chapter_number}
                       </span>

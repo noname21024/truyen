@@ -362,6 +362,7 @@ const HomePage: React.FC = () => {
     story_slug: string;
     story_title: string;
     chapter_number?: number;
+    chapter?: number;
     commentType: 'story' | 'chapter';
     id: number;
   };
@@ -390,6 +391,7 @@ const HomePage: React.FC = () => {
       story_slug: c.story_slug,
       story_title: c.story_title,
       chapter_number: c.chapter_number,
+      chapter: c.chapter,
       commentType: 'chapter' as const,
     })),
   ].filter(c => hasVisibleContent(c.content));
@@ -797,7 +799,7 @@ const HomePage: React.FC = () => {
               <div className="max-h-[480px] overflow-y-auto space-y-3 pr-1 scrollbar-thin scrollbar-thumb-outline-variant/50 scrollbar-track-transparent">
                 {sortedRecentComments.slice(0, commentDisplayCount).map(comment => {
                   const href = comment.commentType === 'chapter'
-                    ? `/chapter/${comment.story_slug}/${comment.chapter_number}`
+                    ? `/chapter/${comment.chapter}`
                     : `/detail/${comment.story_slug}`;
                   const replyCount = replyCountMap[`${comment.commentType}_${comment.id}`] || 0;
                   return (

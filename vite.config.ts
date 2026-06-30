@@ -2,7 +2,7 @@ import path from "path"
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const R2_BASE = 'https://pub-71585e468cd741989c43b01356ee9591.r2.dev';
+const R2_BASE = 'https://cdn.pubnihtruyen.com';
 
 export default defineConfig({
   plugins: [
@@ -21,7 +21,7 @@ export default defineConfig({
       }
     }
   ],
-  base: './',
+  base: '/',
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

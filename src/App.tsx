@@ -27,7 +27,7 @@ function App() {
               <Route path="/" element={<HomePage />} />
               <Route path="/new-update" element={<NewUpdatePage />} />
               <Route path="/detail/:id" element={<DetailPage />} />
-              <Route path="/chapter/:novelId/:chapterIndex" element={<ChapterPage />} />
+              <Route path="/chapter/:chapterId" element={<ChapterPage />} />
               <Route path="/genres/:genreId?" element={<GenrePage />} />
               <Route path="/search" element={<SearchPage />} />
               <Route path="/profile" element={<ProfilePage />} />

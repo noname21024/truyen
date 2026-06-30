@@ -9,7 +9,7 @@ export const STICKER_SETS: StickerSet[] = [
   {
     id: "trollface",
     name: "Trollface",
-    baseUrl: "https://pub-71585e468cd741989c43b01356ee9591.r2.dev/gif/trollface/",
+    baseUrl: "https://cdn.pubnihtruyen.com/gif/trollface/",
     items: [
       "01-kyghe.gif", "02-ahihi.gif", "03-trollgif.gif", "04-lolol.gif", "05-lolol2.gif", "05-lolol3.gif", 
       "06-BlackGuyBeaten.gif", "07-ahaha.gif", "08-Pfftch.gif", "09-dapban.gif", "10-trolldance.gif", 
@@ -46,7 +46,7 @@ export const STICKER_SETS: StickerSet[] = [
   {
     id: "onion",
     name: "Onion",
-    baseUrl: "https://pub-71585e468cd741989c43b01356ee9591.r2.dev/gif/onion/",
+    baseUrl: "https://cdn.pubnihtruyen.com/gif/onion/",
     items: [
       "001.gif", "002.gif", "003.gif", "004.gif", "005.gif", "006.gif", "007.gif", "008.gif", "009.gif", 
       "010.gif", "011.gif", "012.gif", "013.gif", "014.gif", "015.gif", "016.gif", "017.gif", "018.gif", 
@@ -66,7 +66,7 @@ export const STICKER_SETS: StickerSet[] = [
   {
     id: "tho_tzuki",
     name: "Tuzki",
-    baseUrl: "https://pub-71585e468cd741989c43b01356ee9591.r2.dev/gif/tho_tzuki/",
+    baseUrl: "https://cdn.pubnihtruyen.com/gif/tho_tzuki/",
     items: [
       "Upanhso.tk-1.gif", "Upanhso.tk-2.gif", "Upanhso.tk-3.gif", "Upanhso.tk-4.gif", "Upanhso.tk-5.gif", 
       "Upanhso.tk-6.gif", "Upanhso.tk-7.gif", "Upanhso.tk-8.gif", "Upanhso.tk-9.gif", "Upanhso.tk-10.gif", 
