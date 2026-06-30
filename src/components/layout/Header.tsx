@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import novelsDataJson from '@/data/novelsIndex.json';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { CategoryService, NovelService, CoinService, NotificationService, type NotificationData } from '@/lib/api';
+import { api, CategoryService, NovelService, CoinService, NotificationService, type NotificationData } from '@/lib/api';
 import { showCustomAlert, showCustomConfirm } from '@/lib/dialog';
 import { isUserVIP } from '@/lib/user';
 import {
@@ -85,9 +85,8 @@ const Header: React.FC = () => {
   const loginWithGoogle = async () => {
     setIsSubmitting(true);
     try {
-      const resp = await fetch('http://localhost:8000/api/auth/google/');
-      const data = await resp.json();
-      window.location.href = data.auth_url;
+      const resp = await api.get<{ auth_url: string }>('auth/google/');
+      window.location.href = resp.data.auth_url;
     } catch {
       setIsSubmitting(false);
       alert('Không thể kết nối tới server. Vui lòng thử lại.');
@@ -449,8 +448,11 @@ const Header: React.FC = () => {
                               setIsNotifOpen(false);
                               const { story_slug, chapter_number, comment_id } = notif.data;
                               const anchor = comment_id ? `#comment-${comment_id}` : '';
-                              if (notif.type === 'reply_comment' && story_slug && chapter_number) {
-                                window.location.href = `/chapter/${story_slug}/${chapter_number}${anchor}`;
+                              const chapter_id = notif.data.chapter_id;
+                              if (notif.type === 'reply_comment' && (chapter_id || (story_slug && chapter_number))) {
+                                window.location.href = chapter_id
+                                  ? `/chapter/${chapter_id}${anchor}`
+                                  : `/chapter/${story_slug}/${chapter_number}${anchor}`;
                               } else if (story_slug) {
                                 window.location.href = `/detail/${story_slug}${anchor}`;
                               }
