@@ -1,16 +1,27 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/';
-const R2_BASE = 'https://pub-71585e468cd741989c43b01356ee9591.r2.dev';
-export const CDN_BASE = 'https://cdn.pubnihtruyen.com';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/';
 
-function replaceR2(obj: unknown): unknown {
-  if (typeof obj === 'string') return obj.replace(R2_BASE, CDN_BASE);
-  if (Array.isArray(obj)) return obj.map(replaceR2);
-  if (obj && typeof obj === 'object') {
-    return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, replaceR2(v)]));
+// Client-side TTL cache — prevents redundant API calls when navigating between pages
+const _memCache = new Map<string, { data: unknown; exp: number }>();
+const CACHE_TTL = 60_000; // 60s matches server-side Django cache TTL
+
+async function memoGet<T>(url: string, params?: Record<string, string>): Promise<T> {
+  const key = params && Object.keys(params).length > 0
+    ? url + '?' + new URLSearchParams(params).toString()
+    : url;
+  const hit = _memCache.get(key);
+  if (hit && Date.now() < hit.exp) return hit.data as T;
+  const r = await publicApi.get<T>(url, params ? { params } : undefined);
+  _memCache.set(key, { data: r.data, exp: Date.now() + CACHE_TTL });
+  return r.data;
+}
+
+export function invalidateCache(urlPrefix?: string) {
+  if (!urlPrefix) { _memCache.clear(); return; }
+  for (const key of _memCache.keys()) {
+    if (key.startsWith(urlPrefix)) _memCache.delete(key);
   }
-  return obj;
 }
 
 export const api = axios.create({
@@ -28,9 +39,11 @@ api.interceptors.request.use(config => {
   return config;
 });
 
-api.interceptors.response.use(response => {
-  response.data = replaceR2(response.data);
-  return response;
+// Public API instance — no Authorization header so Cloudflare CDN can cache responses
+// for logged-in users too (free plan doesn't support "Ignore Authorization header" rule)
+const publicApi = axios.create({
+  baseURL: API_BASE_URL,
+  headers: { 'Content-Type': 'application/json' },
 });
 
 // TypeScript interfaces matching the Django serializers
@@ -45,6 +58,7 @@ export interface Author {
   name_zh: string;
   name_vi: string;
   slug: string;
+  story_count?: number;
 }
 
 export interface ChapterSummary {
@@ -77,6 +91,8 @@ export interface NovelSummary {
   title: string;
   slug: string;
   author: string | null;
+  author_slug?: string | null;
+  author_id?: number | null;
   genres: Category[];
   cover_url: string;
   background_thumbnail_url?: string | null;
@@ -107,6 +123,8 @@ export interface NovelDetail {
   title: string;
   slug: string;
   author: string | null;
+  author_slug?: string | null;
+  author_id?: number | null;
   genres: Category[];
   cover_url: string;
   background_thumbnail_url?: string | null;
@@ -116,6 +134,8 @@ export interface NovelDetail {
   total_chapters: number;
   view_count: number;
   follow_count: number;
+  rating_avg: number;
+  rating_count: number;
   created_at: string;
   updated_at: string;
   toc: ChapterToc[];
@@ -124,19 +144,18 @@ export interface NovelDetail {
 // Novel API services
 export const NovelService = {
   // Get list of novels with optional filters (search title, category slug, author slug)
-  getNovels: async (params?: { search?: string; category?: string; author?: string }) => {
+  getNovels: async (params?: { search?: string; category?: string; author?: string; status?: string }) => {
     const apiParams: Record<string, string> = {};
     if (params?.search) apiParams.search = params.search;
     if (params?.category) apiParams.genre = params.category;
     if (params?.author) apiParams.author = params.author;
-    const response = await api.get<NovelSummary[]>('stories/', { params: apiParams });
-    return response.data;
+    if (params?.status) apiParams.status = params.status;
+    return memoGet<NovelSummary[]>('stories/', apiParams);
   },
 
   // Get novel detail by its slug (e.g. 'tru-tien')
   getNovelDetail: async (slug: string) => {
-    const response = await api.get<NovelDetail>(`stories/${slug}/`);
-    return response.data;
+    return memoGet<NovelDetail>(`stories/${slug}/`);
   },
 
   // Increment novel views
@@ -150,7 +169,7 @@ export const NovelService = {
 export const ChapterService = {
   // Get list of chapters for a novel slug (legacy, no pagination)
   getChapters: async (novelSlug: string) => {
-    const response = await api.get<ChapterSummary[]>('chapters/', {
+    const response = await publicApi.get<ChapterSummary[]>('chapters/', {
       params: { story: novelSlug },
     });
     return response.data;
@@ -163,7 +182,7 @@ export const ChapterService = {
     search?: string;
     ordering?: string;
   }): Promise<PaginatedChapters> => {
-    const response = await api.get<PaginatedChapters | ChapterSummary[]>('chapters/', {
+    const response = await publicApi.get<PaginatedChapters | ChapterSummary[]>('chapters/', {
       params: {
         story: novelSlug,
         page: params?.page ?? 1,
@@ -180,13 +199,17 @@ export const ChapterService = {
 
   // Get chapter detail by ID (since chapters have primary key ID)
   getChapterDetail: async (id: number | string) => {
-    const response = await api.get<ChapterDetail>(`chapters/${id}/`);
+    const token = localStorage.getItem('auth_token');
+    const instance = token ? api : publicApi;
+    const response = await instance.get<ChapterDetail>(`chapters/${id}/`);
     return response.data;
   },
 
   // Get chapter detail by novel slug and chapter number
   getChapterByNumber: async (novelSlug: string, chapterNumber: number | string) => {
-    const response = await api.get<ChapterDetail[]>('chapters/', {
+    const token = localStorage.getItem('auth_token');
+    const instance = token ? api : publicApi;
+    const response = await instance.get<ChapterDetail[]>('chapters/', {
       params: { story: novelSlug, chapter_number: chapterNumber },
     });
     return response.data[0] || null;
@@ -210,15 +233,20 @@ export const ChapterService = {
 // Category API services
 export const CategoryService = {
   getCategories: async () => {
-    const response = await api.get<Category[]>('genres/');
-    return response.data;
+    return memoGet<Category[]>('genres/');
   },
 };
 
 // Author API services
 export const AuthorService = {
   getAuthors: async () => {
-    const response = await api.get<Author[]>('authors/');
+    const response = await publicApi.get<Author[]>('authors/');
+    return response.data;
+  },
+
+  // Get a single author's info (name + story_count) by slug
+  getAuthorDetail: async (slug: string) => {
+    const response = await publicApi.get<Author>(`authors/${slug}/`);
     return response.data;
   },
 };
@@ -278,7 +306,7 @@ export const CoinService = {
     return r.data;
   },
   getBalance: async () => {
-    const r = await api.get<{ coin_balance: number; is_vip: boolean; vip_expires_at: string | null }>('coin/balance/');
+    const r = await api.get<{ coin_balance: number; is_vip: boolean; vip_expires_at: string | null; is_staff: boolean }>('coin/balance/');
     return r.data;
   },
   createDeposit: async (packageId: number) => {
@@ -335,6 +363,8 @@ export interface StoryCommentData {
   user: number;
   user_name: string;
   user_avatar: string;
+  user_is_vip?: boolean;
+  user_is_staff?: boolean;
   content: string;
   parent: number | null;
   created_at: string;
@@ -349,6 +379,8 @@ export interface ChapterCommentData {
   user: number;
   user_name: string;
   user_avatar: string;
+  user_is_vip?: boolean;
+  user_is_staff?: boolean;
   content: string;
   parent: number | null;
   created_at: string;
@@ -402,6 +434,27 @@ export interface DonationLeaderboardEntry {
   donation_count: number;
 }
 
+export interface LeaderboardPage {
+  count: number;
+  page: number;
+  page_size: number;
+  results: DonationLeaderboardEntry[];
+}
+
+export interface DonationsPage {
+  count: number;
+  results: DonationData[];
+}
+
+export interface TopDonatedStory {
+  story_id: number;
+  story_slug: string;
+  story_title: string;
+  story_cover: string;
+  total_xu: number;
+  donation_count: number;
+}
+
 interface PaginatedResponse<T> {
   count: number;
   next: string | null;
@@ -411,14 +464,14 @@ interface PaginatedResponse<T> {
 
 export const CommentService = {
   getStoryComments: async (storySlug: string): Promise<StoryCommentData[]> => {
-    const r = await api.get<PaginatedResponse<StoryCommentData> | StoryCommentData[]>('story-comments/', {
+    const r = await publicApi.get<PaginatedResponse<StoryCommentData> | StoryCommentData[]>('story-comments/', {
       params: { story_slug: storySlug, page_size: 100 },
     });
     return Array.isArray(r.data) ? r.data : r.data.results;
   },
 
   getRecentComments: async (limit = 50): Promise<StoryCommentData[]> => {
-    const r = await api.get<PaginatedResponse<StoryCommentData> | StoryCommentData[]>('story-comments/', {
+    const r = await publicApi.get<PaginatedResponse<StoryCommentData> | StoryCommentData[]>('story-comments/', {
       params: { page_size: limit },
     });
     return Array.isArray(r.data) ? r.data : r.data.results;
@@ -443,21 +496,21 @@ export const CommentService = {
   },
 
   getRecentChapterComments: async (limit = 50): Promise<ChapterCommentData[]> => {
-    const r = await api.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
+    const r = await publicApi.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
       params: { page_size: limit },
     });
     return Array.isArray(r.data) ? r.data : r.data.results;
   },
 
   getChapterComments: async (chapterId: number): Promise<ChapterCommentData[]> => {
-    const r = await api.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
+    const r = await publicApi.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
       params: { chapter_id: chapterId, page_size: 100 },
     });
     return Array.isArray(r.data) ? r.data : r.data.results;
   },
 
   getChapterCommentsByStory: async (storySlug: string): Promise<ChapterCommentData[]> => {
-    const r = await api.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
+    const r = await publicApi.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
       params: { story_slug: storySlug, page_size: 100 },
     });
     return Array.isArray(r.data) ? r.data : r.data.results;
@@ -523,13 +576,44 @@ export const DonationService = {
     return r.data;
   },
 
-  getDonations: async (params?: { story_slug?: string; month?: string }): Promise<DonationData[]> => {
-    const r = await api.get<PaginatedResponse<DonationData> | DonationData[]>('story-donations/', { params: { ...params, page_size: 50 } });
-    return Array.isArray(r.data) ? r.data : r.data.results;
+  getDonations: async (params?: { story_slug?: string; month?: string; page?: number; page_size?: number }): Promise<DonationsPage> => {
+    const r = await publicApi.get<PaginatedResponse<DonationData> | DonationData[]>('story-donations/', { params: { page_size: 20, ...params } });
+    return Array.isArray(r.data) ? { count: r.data.length, results: r.data } : { count: r.data.count, results: r.data.results };
   },
 
-  getLeaderboard: async (params?: { story_slug?: string; month?: string }): Promise<DonationLeaderboardEntry[]> => {
-    const r = await api.get<DonationLeaderboardEntry[]>('story-donations/leaderboard/', { params });
+  getLeaderboard: async (params?: { story_slug?: string; period?: 'today'; month?: string; page?: number; page_size?: number }): Promise<LeaderboardPage> => {
+    const r = await publicApi.get<LeaderboardPage>('story-donations/leaderboard/', { params });
+    return r.data;
+  },
+
+  getTopStories: async (period?: 'today' | 'week' | 'month' | 'all'): Promise<TopDonatedStory[]> => {
+    const r = await publicApi.get<TopDonatedStory[]>('story-donations/top-stories/', { params: { period } });
+    return r.data;
+  },
+};
+
+export const StoryFollowService = {
+  toggle: async (storySlug: string): Promise<{ following: boolean; follow_count: number }> => {
+    const r = await api.post('story-follows/toggle/', { story_slug: storySlug });
+    return r.data;
+  },
+
+  // Returns whether the logged-in user already follows this story (scoped server-side to the current user)
+  checkFollowing: async (storySlug: string): Promise<boolean> => {
+    const r = await api.get<PaginatedResponse<{ id: number }> | { id: number }[]>('story-follows/', { params: { story_slug: storySlug } });
+    const list = Array.isArray(r.data) ? r.data : r.data.results;
+    return list.length > 0;
+  },
+};
+
+export const StoryRatingService = {
+  rate: async (storySlug: string, rating: number): Promise<{ user_rating: number; rating_avg: number; rating_count: number }> => {
+    const r = await api.post('story-ratings/rate/', { story_slug: storySlug, rating });
+    return r.data;
+  },
+
+  getMyRating: async (storySlug: string): Promise<{ user_rating: number | null }> => {
+    const r = await api.get('story-ratings/my-rating/', { params: { story_slug: storySlug } });
     return r.data;
   },
 };

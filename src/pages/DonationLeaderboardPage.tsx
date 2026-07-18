@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { DonationService, type DonationLeaderboardEntry, type DonationData, type GiftType } from '@/lib/api';
+import SimplePagination from '@/components/ui/SimplePagination';
+import { DonationService, type DonationLeaderboardEntry, type DonationData, type GiftType, type TopDonatedStory } from '@/lib/api';
 
 const TIER_STYLE: Record<string, string> = {
   common:    'bg-slate-50/50 hover:bg-slate-50 dark:bg-[#121316]/20 dark:hover:bg-[#1c1d21]/20 border-outline-variant/35 text-on-surface-variant',
@@ -20,40 +21,150 @@ function formatXu(n: number) {
   return `${n.toLocaleString('vi-VN')} xu`;
 }
 
-type Tab = 'month' | 'all' | 'gifts';
+type Tab = 'day' | 'month' | 'all' | 'gifts' | 'stories';
+type StoriesPeriod = 'today' | 'week';
+
+const LEADERBOARD_PAGE_SIZE = 20;
+const GIFTS_FEED_PAGE_SIZE = 20;
+
+const EMPTY_LABEL: Record<'day' | 'month' | 'all', string> = {
+  day: 'hôm nay',
+  month: 'tháng này',
+  all: '',
+};
 
 const DonationLeaderboardPage: React.FC = () => {
-  const [tab, setTab] = useState<Tab>('month');
-  const [leaderboardMonth, setLeaderboardMonth] = useState<DonationLeaderboardEntry[]>([]);
-  const [leaderboardAll, setLeaderboardAll] = useState<DonationLeaderboardEntry[]>([]);
+  const [tab, setTab] = useState<Tab>('day');
+
+  // Person leaderboard (day/month/all) — real numbered pagination (one page fetched at a time)
+  const [leaderboard, setLeaderboard] = useState<DonationLeaderboardEntry[]>([]);
+  const [leaderboardCount, setLeaderboardCount] = useState(0);
+  const [leaderboardPage, setLeaderboardPage] = useState(1);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(true);
+
   const [recentDonations, setRecentDonations] = useState<DonationData[]>([]);
   const [giftTypes, setGiftTypes] = useState<GiftType[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [previewLoading, setPreviewLoading] = useState(true);
+
+  // Full "Quà gần đây" feed — lazy-loaded on scroll, batches of 20
+  const [giftsFeed, setGiftsFeed] = useState<DonationData[]>([]);
+  const [giftsFeedCount, setGiftsFeedCount] = useState(0);
+  const [giftsFeedPage, setGiftsFeedPage] = useState(1);
+  const [giftsFeedLoading, setGiftsFeedLoading] = useState(false);
+  const [giftsFeedLoadingMore, setGiftsFeedLoadingMore] = useState(false);
+  const giftsFeedSentinelRef = useRef<HTMLDivElement>(null);
+
+  const [storiesPeriod, setStoriesPeriod] = useState<StoriesPeriod>('today');
+  const [topStories, setTopStories] = useState<TopDonatedStory[]>([]);
+  const [topStoriesLoading, setTopStoriesLoading] = useState(false);
 
   const currentMonth = getCurrentMonth();
 
+  const leaderboardParamsForTab = (t: Tab) => {
+    if (t === 'day') return { period: 'today' as const };
+    if (t === 'month') return { month: currentMonth };
+    return {};
+  };
+
+  // Reset to page 1 whenever the active period tab changes
+  useEffect(() => { setLeaderboardPage(1); }, [tab]);
+
+  // Fetch the current page of the person leaderboard whenever the tab or page changes
   useEffect(() => {
-    setLoading(true);
+    if (tab !== 'day' && tab !== 'month' && tab !== 'all') return;
+    let cancelled = false;
+    setLeaderboardLoading(true);
+    DonationService.getLeaderboard({ ...leaderboardParamsForTab(tab), page: leaderboardPage, page_size: LEADERBOARD_PAGE_SIZE })
+      .then(data => {
+        if (cancelled) return;
+        setLeaderboard(data.results);
+        setLeaderboardCount(data.count);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLeaderboard([]);
+        setLeaderboardCount(0);
+      })
+      .finally(() => { if (!cancelled) setLeaderboardLoading(false); });
+    return () => { cancelled = true; };
+  }, [tab, leaderboardPage]);
+
+  // Load small recent-activity preview + gift types once on mount (independent of leaderboard pagination)
+  useEffect(() => {
+    setPreviewLoading(true);
     Promise.all([
-      DonationService.getLeaderboard({ month: currentMonth }),
-      DonationService.getLeaderboard(),
-      DonationService.getDonations(),
+      DonationService.getDonations({ page_size: 10 }),
       DonationService.getGiftTypes(),
-    ]).then(([lbMonth, lbAll, donations, gifts]) => {
-      setLeaderboardMonth(lbMonth);
-      setLeaderboardAll(lbAll);
-      setRecentDonations(donations);
+    ]).then(([donationsPage, gifts]) => {
+      setRecentDonations(donationsPage.results);
       setGiftTypes(gifts);
-    }).catch(() => {}).finally(() => setLoading(false));
+    }).catch(() => {}).finally(() => setPreviewLoading(false));
   }, []);
 
+  // Load page 1 of the full gifts feed the first time the "Quà gần đây" tab is opened
+  useEffect(() => {
+    if (tab !== 'gifts' || giftsFeed.length > 0) return;
+    let cancelled = false;
+    setGiftsFeedLoading(true);
+    DonationService.getDonations({ page: 1, page_size: GIFTS_FEED_PAGE_SIZE })
+      .then(data => {
+        if (cancelled) return;
+        setGiftsFeed(data.results);
+        setGiftsFeedCount(data.count);
+        setGiftsFeedPage(1);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setGiftsFeedLoading(false); });
+    return () => { cancelled = true; };
+  }, [tab]);
+
+  const handleLoadMoreGifts = useCallback(() => {
+    if (giftsFeedLoadingMore || giftsFeed.length >= giftsFeedCount) return;
+    const nextPage = giftsFeedPage + 1;
+    setGiftsFeedLoadingMore(true);
+    DonationService.getDonations({ page: nextPage, page_size: GIFTS_FEED_PAGE_SIZE })
+      .then(data => {
+        setGiftsFeed(prev => [...prev, ...data.results]);
+        setGiftsFeedCount(data.count);
+        setGiftsFeedPage(nextPage);
+      })
+      .catch(() => {})
+      .finally(() => setGiftsFeedLoadingMore(false));
+  }, [giftsFeedPage, giftsFeedLoadingMore, giftsFeed.length, giftsFeedCount]);
+
+  // IntersectionObserver: lazy-load the next batch of gifts as the sentinel scrolls into view
+  useEffect(() => {
+    if (tab !== 'gifts') return;
+    const el = giftsFeedSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting) handleLoadMoreGifts();
+    }, { threshold: 0.1 });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [tab, handleLoadMoreGifts]);
+
+  // Load top donated stories when the "Truyện Hot" tab is active, refetch on period change
+  useEffect(() => {
+    if (tab !== 'stories') return;
+    let cancelled = false;
+    setTopStoriesLoading(true);
+    DonationService.getTopStories(storiesPeriod)
+      .then(data => { if (!cancelled) setTopStories(data); })
+      .catch(() => { if (!cancelled) setTopStories([]); })
+      .finally(() => { if (!cancelled) setTopStoriesLoading(false); });
+    return () => { cancelled = true; };
+  }, [tab, storiesPeriod]);
+
   const tabs: { id: Tab; label: string; icon: string }[] = [
+    { id: 'day', label: 'Hôm nay', icon: 'today' },
     { id: 'month', label: 'Tháng này', icon: 'calendar_month' },
     { id: 'all',   label: 'Tất cả',    icon: 'leaderboard' },
     { id: 'gifts', label: 'Quà gần đây', icon: 'history' },
+    { id: 'stories', label: 'Truyện Hot', icon: 'b3:fire' },
   ];
 
-  const leaderboard = tab === 'month' ? leaderboardMonth : leaderboardAll;
+  const leaderboardTotalPages = Math.max(1, Math.ceil(leaderboardCount / LEADERBOARD_PAGE_SIZE));
 
   return (
     <div className="max-w-[1300px] mx-auto px-6 md:px-12 pt-6 pb-16 w-full min-h-screen">
@@ -97,12 +208,12 @@ const DonationLeaderboardPage: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex bg-surface-variant/40 border border-outline-variant/30 rounded-xl p-1 mb-8 max-w-md font-label-bold text-xs select-none">
+      <div className="flex bg-surface-variant/40 border border-outline-variant/30 rounded-xl p-1 mb-8 max-w-2xl font-label-bold text-xs select-none overflow-x-auto">
         {tabs.map(t => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`flex-1 text-center py-2 px-3 rounded-lg transition-colors font-bold flex items-center justify-center gap-1.5 ${
+            className={`flex-1 text-center py-2 px-3 rounded-lg transition-colors font-bold flex items-center justify-center gap-1.5 whitespace-nowrap ${
               tab === t.id
                 ? 'bg-primary text-on-primary shadow-xs'
                 : 'text-on-surface-variant hover:text-primary hover:bg-primary/5'
@@ -114,7 +225,159 @@ const DonationLeaderboardPage: React.FC = () => {
         ))}
       </div>
 
-      {loading ? (
+      {tab === 'stories' ? (
+        <div className="space-y-6">
+          {/* Period toggle */}
+          <div className="flex bg-surface-variant/30 border border-outline-variant/30 rounded-xl p-1 max-w-xs font-label-bold text-xs select-none">
+            {(['today', 'week'] as const).map(p => (
+              <button
+                key={p}
+                onClick={() => setStoriesPeriod(p)}
+                className={`flex-1 text-center py-2 px-3 rounded-lg transition-colors font-bold ${
+                  storiesPeriod === p
+                    ? 'bg-primary text-on-primary shadow-xs'
+                    : 'text-on-surface-variant hover:text-primary hover:bg-primary/5'
+                }`}
+              >
+                {p === 'today' ? 'Hôm nay' : 'Tuần này'}
+              </button>
+            ))}
+          </div>
+
+          {topStoriesLoading ? (
+            <div className="space-y-4 animate-pulse max-w-4xl mx-auto">
+              {[1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="flex items-center gap-4 p-4 border border-outline-variant/30 rounded-2xl bg-surface shadow-xs">
+                  <div className="w-10 h-14 bg-outline-variant/20 rounded-sm shrink-0" />
+                  <div className="flex-grow space-y-2">
+                    <div className="h-4 bg-outline-variant/20 rounded w-1/2" />
+                    <div className="h-3 bg-outline-variant/20 rounded w-20" />
+                  </div>
+                  <div className="w-16 h-5 bg-outline-variant/20 rounded shrink-0" />
+                </div>
+              ))}
+            </div>
+          ) : topStories.length === 0 ? (
+            <div className="py-24 text-center text-sm text-on-surface-variant bg-surface border border-outline-variant/30 rounded-2xl">
+              <ViconicIcon name="local_fire_department" size={48} className="mx-auto mb-4 text-outline/40" />
+              <p className="font-bold text-on-surface mb-1">
+                Chưa có truyện nào được ủng hộ {storiesPeriod === 'today' ? 'hôm nay' : 'tuần này'}
+              </p>
+              <p className="text-xs text-on-surface-variant">Ủng hộ dịch giả để giúp truyện lên top nhé!</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 max-w-4xl mx-auto">
+              {topStories.map((s, idx) => {
+                const rankColor = idx === 0
+                  ? 'bg-amber-500 text-white shadow-xs shadow-amber-500/20'
+                  : idx === 1
+                    ? 'bg-slate-400 text-white shadow-xs shadow-slate-400/20'
+                    : idx === 2
+                      ? 'bg-orange-400 text-white shadow-xs shadow-orange-400/20'
+                      : 'bg-surface-variant text-on-surface-variant border border-outline-variant/50';
+                return (
+                  <Link
+                    key={s.story_id}
+                    to={`/detail/${s.story_slug}`}
+                    className="flex items-center gap-4 p-4 border border-outline-variant/30 hover:border-primary/40 bg-white/50 dark:bg-[#121316]/20 hover:bg-slate-50/50 dark:hover:bg-[#1c1d21]/20 rounded-2xl shadow-xs transition-all duration-300 group"
+                  >
+                    <span className={`w-8 h-8 flex items-center justify-center rounded-full text-xs font-black shrink-0 ${rankColor}`}>
+                      {idx + 1}
+                    </span>
+                    <img
+                      src={s.story_cover || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover"}
+                      alt={s.story_title}
+                      className="w-10 h-14 object-cover rounded-sm border border-outline-variant/50 shrink-0"
+                    />
+                    <div className="flex-grow min-w-0">
+                      <p className="font-bold text-sm text-on-surface truncate group-hover:text-primary transition-colors">{s.story_title}</p>
+                      <p className="text-[10px] text-on-surface-variant mt-0.5">{s.donation_count} lượt ủng hộ</p>
+                    </div>
+                    <span className="font-black text-sm text-amber-600 dark:text-amber-400 shrink-0">{formatXu(s.total_xu)}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : tab === 'gifts' ? (
+        /* Recent gifts tab */
+        <div className="space-y-4 max-w-4xl mx-auto">
+          <div className="bg-surface-variant/20 p-4 border border-outline-variant/20 rounded-2xl mb-2 flex items-center gap-2">
+            <ViconicIcon name="info" size={16} className="text-primary shrink-0" />
+            <p className="text-xs text-on-surface-variant font-medium">Những lượt quyên góp góp lửa mới nhất trên toàn hệ thống.</p>
+          </div>
+
+          {giftsFeedLoading ? (
+            <div className="space-y-3 animate-pulse">
+              {[1, 2, 3, 4, 5].map(i => (
+                <div key={i} className="h-16 bg-surface border border-outline-variant/30 rounded-2xl" />
+              ))}
+            </div>
+          ) : giftsFeed.length === 0 ? (
+            <div className="py-24 text-center text-sm text-on-surface-variant bg-surface border border-outline-variant/30 rounded-2xl">
+              <ViconicIcon name="card_giftcard" size={48} className="mx-auto mb-4 text-outline/40" />
+              <p className="font-bold text-on-surface mb-1">Chưa có quà nào được tặng</p>
+              <p className="text-xs text-on-surface-variant font-medium">Hãy là người đầu tiên tiếp sức cho tác giả nhé!</p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 gap-3">
+                {giftsFeed.map(d => {
+                  const gift = giftTypes.find(g => g.id === d.gift_type);
+                  const tier = gift?.tier ?? 'common';
+                  return (
+                    <Link
+                      key={d.id}
+                      to={`/detail/${d.story_slug}`}
+                      className={`flex items-center gap-4 p-4 rounded-2xl border transition-all duration-300 group ${TIER_STYLE[tier]}`}
+                    >
+                      {/* Gift icon */}
+                      <img
+                        src={`/icons/donate/${
+                          d.gift_type === 'tra_da' ? 'money-bag' :
+                          d.gift_type === 'tich_ta_kiem' ? 'sword' :
+                          d.gift_type === 'linh_dan' ? 'runes' :
+                          d.gift_type === 'bi_kip' ? 'spell-book' :
+                          d.gift_type === 'ngu_kiem' ? 'sword-fly' :
+                          d.gift_type === 'than_thu' ? 'dragon' :
+                          d.gift_type === 'dai_tran' ? 'freeze' :
+                          d.gift_type === 'phi_thuyen' ? 'space' :
+                          d.gift_type === 'chi_ton' ? 'throne' : 'money-bag'
+                        }.png`}
+                        alt={d.gift_name}
+                        className={`object-contain shrink-0 ${tier === 'legendary' ? 'w-11 h-11 animate-pulse' : tier === 'rare' ? 'w-9 h-9' : 'w-8 h-8'}`}
+                      />
+                      {/* User avatar */}
+                      <img
+                        src={d.user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${d.user_name}`}
+                        alt={d.user_name}
+                        className="w-8 h-8 rounded-full object-cover border border-outline-variant/40 shrink-0"
+                      />
+                      <div className="flex-grow min-w-0 text-xs sm:text-sm">
+                        <span className="font-bold text-on-surface">{d.user_name}</span>
+                        <span className="opacity-75"> đã tặng </span>
+                        <span className="font-black text-primary bg-primary/5 px-1.5 py-0.5 rounded-md border border-primary/10 select-none">{d.gift_name}</span>
+                        <span className="opacity-75"> cho truyện </span>
+                        <span className="font-bold text-on-surface group-hover:text-primary transition-colors underline decoration-outline-variant underline-offset-4">{d.story_title}</span>
+                      </div>
+                      <span className="text-[10px] opacity-60 shrink-0">{new Date(d.created_at).toLocaleDateString('vi-VN')}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+              {giftsFeed.length < giftsFeedCount && (
+                <div ref={giftsFeedSentinelRef} className="py-4 flex items-center justify-center gap-1.5 text-[10px] text-on-surface-variant/50">
+                  {giftsFeedLoadingMore && (
+                    <span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  )}
+                  Đang tải thêm quà tặng...
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      ) : leaderboardLoading ? (
         <div className="space-y-4 animate-pulse">
           {[1, 2, 3, 4, 5].map((i) => (
             <div key={i} className="flex items-center gap-4 sm:gap-6 py-4 px-5 border border-outline-variant/30 rounded-2xl bg-surface shadow-xs">
@@ -127,17 +390,19 @@ const DonationLeaderboardPage: React.FC = () => {
             </div>
           ))}
         </div>
-      ) : (tab === 'month' || tab === 'all') ? (
+      ) : (
+        /* Person leaderboard: day / month / all — paginated */
         <div className="space-y-6">
           {leaderboard.length === 0 ? (
             <div className="py-24 text-center text-sm text-on-surface-variant bg-surface border border-outline-variant/30 rounded-2xl">
               <ViconicIcon name="sentiment_dissatisfied" size={48} className="mx-auto mb-4 text-outline/40" />
-              <p className="font-bold text-on-surface mb-1">Chưa có ai ủng hộ {tab === 'month' ? 'tháng này' : ''}</p>
+              <p className="font-bold text-on-surface mb-1">Chưa có ai ủng hộ {EMPTY_LABEL[tab as 'day' | 'month' | 'all']}</p>
               <p className="text-xs text-on-surface-variant">Hãy trở thành người đầu tiên ủng hộ dịch giả nhé!</p>
             </div>
           ) : (
             <>
-              {/* Podium for top 3 (Desktop only) */}
+              {/* Podium for top 3 (Desktop only, page 1 only — later pages don't hold the true top 3) */}
+              {leaderboardPage === 1 && (
               <div className="hidden md:flex justify-center items-end gap-8 my-12 max-w-4xl mx-auto bg-surface-variant/15 border border-outline-variant/30 rounded-2xl p-8 relative overflow-hidden backdrop-blur-xs shadow-xs">
                 {/* Visual Glow */}
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-64 h-64 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
@@ -147,10 +412,10 @@ const DonationLeaderboardPage: React.FC = () => {
                   <div className="flex flex-col items-center w-52 shrink-0 animate-in fade-in slide-in-from-bottom duration-500 delay-100">
                     <div className="relative mb-3.5">
                       <div className="w-16 h-16 rounded-full border-4 border-slate-305 bg-surface shadow-md overflow-hidden">
-                        <img 
-                          src={leaderboard[1].user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${leaderboard[1].user_name}`} 
-                          alt={leaderboard[1].user_name} 
-                          className="w-full h-full object-cover" 
+                        <img
+                          src={leaderboard[1].user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${leaderboard[1].user_name}`}
+                          alt={leaderboard[1].user_name}
+                          className="w-full h-full object-cover"
                         />
                       </div>
                       <div className="absolute -top-2.5 -right-1.5 bg-slate-400 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-black shadow border border-white">
@@ -175,10 +440,10 @@ const DonationLeaderboardPage: React.FC = () => {
                       <ViconicIcon name="u4:vip-crown-queen-1-bold" size={32} className="text-amber-500 drop-shadow absolute -top-7 left-1/2 -translate-x-1/2 transform -rotate-12 animate-bounce" />
                       <div className="w-20 h-20 rounded-full p-[3px] bg-gradient-to-tr from-amber-500 via-yellow-400 to-amber-600 shadow-lg overflow-hidden">
                         <div className="w-full h-full rounded-full border-2 border-white bg-surface overflow-hidden">
-                          <img 
-                            src={leaderboard[0].user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${leaderboard[0].user_name}`} 
-                            alt={leaderboard[0].user_name} 
-                            className="w-full h-full object-cover" 
+                          <img
+                            src={leaderboard[0].user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${leaderboard[0].user_name}`}
+                            alt={leaderboard[0].user_name}
+                            className="w-full h-full object-cover"
                           />
                         </div>
                       </div>
@@ -204,10 +469,10 @@ const DonationLeaderboardPage: React.FC = () => {
                   <div className="flex flex-col items-center w-52 shrink-0 animate-in fade-in slide-in-from-bottom duration-500 delay-200">
                     <div className="relative mb-3.5">
                       <div className="w-16 h-16 rounded-full border-4 border-orange-300 bg-surface shadow-md overflow-hidden">
-                        <img 
-                          src={leaderboard[2].user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${leaderboard[2].user_name}`} 
-                          alt={leaderboard[2].user_name} 
-                          className="w-full h-full object-cover" 
+                        <img
+                          src={leaderboard[2].user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${leaderboard[2].user_name}`}
+                          alt={leaderboard[2].user_name}
+                          className="w-full h-full object-cover"
                         />
                       </div>
                       <div className="absolute -top-2.5 -right-1.5 bg-orange-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-black shadow border border-white">
@@ -224,13 +489,14 @@ const DonationLeaderboardPage: React.FC = () => {
                   </div>
                 )}
               </div>
+              )}
 
               {/* Ranks list */}
               <div className="grid grid-cols-1 gap-4 max-w-4xl mx-auto">
                 {leaderboard.map((entry, idx) => {
-                  const rank = idx + 1;
+                  const rank = (leaderboardPage - 1) * LEADERBOARD_PAGE_SIZE + idx + 1;
                   const isTop3 = rank <= 3;
-                  
+
                   let cardBorder = "border-slate-100 dark:border-slate-800/40 hover:border-primary/20 hover:shadow-xs";
                   let cardBg = "bg-white dark:bg-[#121316]/30 hover:bg-slate-50/50 dark:hover:bg-[#1c1d21]/30";
                   let rankElement = null;
@@ -306,11 +572,19 @@ const DonationLeaderboardPage: React.FC = () => {
                   );
                 })}
               </div>
+
+              {/* Numbered pagination — fetches one page at a time from the server */}
+              <SimplePagination
+                currentPage={leaderboardPage}
+                totalPages={leaderboardTotalPages}
+                onPageChange={(p) => { setLeaderboardPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                className="max-w-4xl mx-auto"
+              />
             </>
           )}
 
           {/* Recent donations feed */}
-          {tab === 'month' && recentDonations.length > 0 && (
+          {tab === 'day' && !previewLoading && recentDonations.length > 0 && (
             <div className="mt-12 max-w-4xl mx-auto">
               <h2 className="text-base font-bold text-on-surface mb-5 flex items-center gap-2">
                 <ViconicIcon name="feed" size={20} className="text-primary shrink-0" />
@@ -318,15 +592,15 @@ const DonationLeaderboardPage: React.FC = () => {
               </h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {recentDonations.slice(0, 10).map(d => (
-                  <Link 
-                    key={d.id} 
-                    to={`/detail/${d.story_slug}`} 
+                  <Link
+                    key={d.id}
+                    to={`/detail/${d.story_slug}`}
                     className="flex items-center gap-3 p-4 border border-outline-variant/20 hover:border-primary/20 bg-white/50 dark:bg-[#121316]/20 hover:bg-slate-50/50 dark:hover:bg-[#1c1d21]/20 rounded-2xl shadow-xs transition-all duration-300 group"
                   >
-                    <img 
-                      src={d.user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${d.user_name}`} 
-                      alt={d.user_name} 
-                      className="w-8 h-8 rounded-full object-cover border border-outline-variant/40 shrink-0" 
+                    <img
+                      src={d.user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${d.user_name}`}
+                      alt={d.user_name}
+                      className="w-8 h-8 rounded-full object-cover border border-outline-variant/40 shrink-0"
                     />
                     <div className="flex-grow min-w-0 text-xs leading-normal">
                       <p className="truncate text-on-surface">
@@ -344,67 +618,6 @@ const DonationLeaderboardPage: React.FC = () => {
                   </Link>
                 ))}
               </div>
-            </div>
-          )}
-        </div>
-      ) : (
-        /* Recent gifts tab */
-        <div className="space-y-4 max-w-4xl mx-auto">
-          <div className="bg-surface-variant/20 p-4 border border-outline-variant/20 rounded-2xl mb-2 flex items-center gap-2">
-            <ViconicIcon name="info" size={16} className="text-primary shrink-0" />
-            <p className="text-xs text-on-surface-variant font-medium">Những lượt quyên góp góp lửa mới nhất trên toàn hệ thống.</p>
-          </div>
-          
-          {recentDonations.length === 0 ? (
-            <div className="py-24 text-center text-sm text-on-surface-variant bg-surface border border-outline-variant/30 rounded-2xl">
-              <ViconicIcon name="card_giftcard" size={48} className="mx-auto mb-4 text-outline/40" />
-              <p className="font-bold text-on-surface mb-1">Chưa có quà nào được tặng</p>
-              <p className="text-xs text-on-surface-variant font-medium">Hãy là người đầu tiên tiếp sức cho tác giả nhé!</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-3">
-              {recentDonations.map(d => {
-                const gift = giftTypes.find(g => g.id === d.gift_type);
-                const tier = gift?.tier ?? 'common';
-                return (
-                  <Link
-                    key={d.id}
-                    to={`/detail/${d.story_slug}`}
-                    className={`flex items-center gap-4 p-4 rounded-2xl border transition-all duration-300 group ${TIER_STYLE[tier]}`}
-                  >
-                    {/* Gift icon */}
-                    <img
-                      src={`/icons/donate/${
-                        d.gift_type === 'tra_da' ? 'money-bag' :
-                        d.gift_type === 'tich_ta_kiem' ? 'sword' :
-                        d.gift_type === 'linh_dan' ? 'runes' :
-                        d.gift_type === 'bi_kip' ? 'spell-book' :
-                        d.gift_type === 'ngu_kiem' ? 'sword-fly' :
-                        d.gift_type === 'than_thu' ? 'dragon' :
-                        d.gift_type === 'dai_tran' ? 'freeze' :
-                        d.gift_type === 'phi_thuyen' ? 'space' :
-                        d.gift_type === 'chi_ton' ? 'throne' : 'money-bag'
-                      }.png`}
-                      alt={d.gift_name}
-                      className={`object-contain shrink-0 ${tier === 'legendary' ? 'w-11 h-11 animate-pulse' : tier === 'rare' ? 'w-9 h-9' : 'w-8 h-8'}`}
-                    />
-                    {/* User avatar */}
-                    <img 
-                      src={d.user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${d.user_name}`} 
-                      alt={d.user_name} 
-                      className="w-8 h-8 rounded-full object-cover border border-outline-variant/40 shrink-0" 
-                    />
-                    <div className="flex-grow min-w-0 text-xs sm:text-sm">
-                      <span className="font-bold text-on-surface">{d.user_name}</span>
-                      <span className="opacity-75"> đã tặng </span>
-                      <span className="font-black text-primary bg-primary/5 px-1.5 py-0.5 rounded-md border border-primary/10 select-none">{d.gift_name}</span>
-                      <span className="opacity-75"> cho truyện </span>
-                      <span className="font-bold text-on-surface group-hover:text-primary transition-colors underline decoration-outline-variant underline-offset-4">{d.story_title}</span>
-                    </div>
-                    <span className="text-[10px] opacity-60 shrink-0">{new Date(d.created_at).toLocaleDateString('vi-VN')}</span>
-                  </Link>
-                );
-              })}
             </div>
           )}
         </div>

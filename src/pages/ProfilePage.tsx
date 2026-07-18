@@ -2,9 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import ViconicIcon from '@/components/ui/ViconicIcon';
 import NovelCard from '@/components/cards/NovelCard';
+import SimplePagination from '@/components/ui/SimplePagination';
 import { NovelService, CoinService } from '@/lib/api';
 import { showCustomAlert, showCustomConfirm } from '@/lib/dialog';
 import { isUserVIP } from '@/lib/user';
+
+const LIST_PAGE_SIZE = 10;
+const GRID_PAGE_SIZE = 12;
 
 const ProfilePage: React.FC = () => {
   const navigate = useNavigate();
@@ -14,6 +18,9 @@ const ProfilePage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'shelf' | 'history' | 'purchased'>('shelf');
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [purchasedNovels, setPurchasedNovels] = useState<any[]>([]);
+  const [shelfPage, setShelfPage] = useState(1);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [purchasedPage, setPurchasedPage] = useState(1);
 
   const formatRelativeTime = (isoString: string) => {
     try {
@@ -48,7 +55,7 @@ const ProfilePage: React.FC = () => {
       // Fetch latest balance & VIP status from backend to ensure immediate sync
       CoinService.getBalance()
         .then(data => {
-          const updatedUser = { ...parsedUser, coin_balance: data.coin_balance, is_vip: data.is_vip };
+          const updatedUser = { ...parsedUser, coin_balance: data.coin_balance, is_vip: data.is_vip, is_staff: data.is_staff };
           localStorage.setItem('user', JSON.stringify(updatedUser));
           setCurrentUser(updatedUser);
         })
@@ -73,7 +80,7 @@ const ProfilePage: React.FC = () => {
       // Fetch novels from API and filter matches
       NovelService.getNovels()
         .then(data => {
-          const matched = data.filter((novel: any) => followedSlugs.includes(novel.slug));
+          const matched = data.filter((novel: any) => followedSlugs.includes(novel.slug) || followedSlugs.includes(String(novel.id)));
           setFollowedNovels(matched);
           setLoading(false);
         })
@@ -99,7 +106,7 @@ const ProfilePage: React.FC = () => {
         NovelService.getNovels()
           .then(allStories => {
             const mapped = parsed.map(item => {
-              const matchedNovel = allStories.find(s => s.slug === item.novelId);
+              const matchedNovel = allStories.find(s => s.id === item.novelId || s.slug === item.novelId);
               return {
                 ...item,
                 coverUrl: matchedNovel?.cover_url || 'https://placehold.co/120x168/e2e8f0/64748b?text=Book'
@@ -365,10 +372,10 @@ const ProfilePage: React.FC = () => {
           {activeTab === 'shelf' && (
             <div className="space-y-4">
               {followedNovels.length > 0 ? (
-                followedNovels.map((novel) => (
+                followedNovels.slice((shelfPage - 1) * LIST_PAGE_SIZE, shelfPage * LIST_PAGE_SIZE).map((novel) => (
                   <div key={novel.id} className="flex gap-4 p-3 border border-outline-variant/30 rounded-lg bg-surface/50 hover:bg-surface-variant/10 transition-colors duration-200">
                     {/* Novel Cover Image */}
-                    <Link to={`/detail/${novel.slug}`} className="w-16 h-22 sm:w-20 sm:h-28 rounded-md overflow-hidden shrink-0 shadow-sm border border-outline-variant/30 relative group block">
+                    <Link to={`/detail/${novel.id}`} className="w-16 h-22 sm:w-20 sm:h-28 rounded-md overflow-hidden shrink-0 shadow-sm border border-outline-variant/30 relative group block">
                       <img 
                         src={novel.cover_url || 'https://placehold.co/120x168/e2e8f0/64748b?text=Book'} 
                         alt={novel.title} 
@@ -381,7 +388,7 @@ const ProfilePage: React.FC = () => {
                       <div className="space-y-1">
                         <div className="flex items-start gap-2 justify-between">
                           <Link 
-                            to={`/detail/${novel.slug}`} 
+                            to={`/detail/${novel.id}`} 
                             className="font-bold text-sm sm:text-base text-on-surface hover:text-primary transition-colors line-clamp-1 flex-grow"
                           >
                             {novel.title}
@@ -434,14 +441,22 @@ const ProfilePage: React.FC = () => {
                   </Link>
                 </div>
               )}
+              {followedNovels.length > 0 && (
+                <SimplePagination
+                  currentPage={shelfPage}
+                  totalPages={Math.max(1, Math.ceil(followedNovels.length / LIST_PAGE_SIZE))}
+                  onPageChange={(p) => { setShelfPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                  className="mt-6"
+                />
+              )}
             </div>
           )}
- 
+
           {/* Tab Content 2: Reading History List */}
           {activeTab === 'history' && (
             <div className="space-y-4">
               {historyList.length > 0 ? (
-                historyList.map((item, idx) => (
+                historyList.slice((historyPage - 1) * LIST_PAGE_SIZE, historyPage * LIST_PAGE_SIZE).map((item, idx) => (
                   <div key={idx} className="flex gap-4 p-3 border border-outline-variant/30 rounded-lg bg-surface/50 hover:bg-surface-variant/10 transition-colors duration-200">
                     {/* Novel Cover Image */}
                     <Link to={`/detail/${item.novelId}`} className="w-16 h-22 sm:w-20 sm:h-28 rounded-md overflow-hidden shrink-0 shadow-sm border border-outline-variant/30 relative group block">
@@ -491,6 +506,14 @@ const ProfilePage: React.FC = () => {
                   </Link>
                 </div>
               )}
+              {historyList.length > 0 && (
+                <SimplePagination
+                  currentPage={historyPage}
+                  totalPages={Math.max(1, Math.ceil(historyList.length / LIST_PAGE_SIZE))}
+                  onPageChange={(p) => { setHistoryPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                  className="mt-6"
+                />
+              )}
             </div>
           )}
 
@@ -499,10 +522,10 @@ const ProfilePage: React.FC = () => {
             <div>
               {purchasedNovels.length > 0 ? (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-6">
-                  {purchasedNovels.map((novel) => (
-                    <NovelCard 
+                  {purchasedNovels.slice((purchasedPage - 1) * GRID_PAGE_SIZE, purchasedPage * GRID_PAGE_SIZE).map((novel) => (
+                    <NovelCard
                       key={novel.id}
-                      id={novel.slug}
+                      id={novel.id}
                       title={novel.title}
                       author={novel.author || "Đang cập nhật"}
                       status={novel.status === 'COMPLETED' ? 'Hoàn thành' : 'Đang ra'}
@@ -529,6 +552,14 @@ const ProfilePage: React.FC = () => {
                     Khám phá truyện VIP
                   </Link>
                 </div>
+              )}
+              {purchasedNovels.length > 0 && (
+                <SimplePagination
+                  currentPage={purchasedPage}
+                  totalPages={Math.max(1, Math.ceil(purchasedNovels.length / GRID_PAGE_SIZE))}
+                  onPageChange={(p) => { setPurchasedPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                  className="mt-6"
+                />
               )}
             </div>
           )}

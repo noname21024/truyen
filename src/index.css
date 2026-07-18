@@ -50,10 +50,10 @@
   display: none !important;
 }
 
-/* Hero Swiper Navigation & Pagination Customization */
+/* Hero Swiper Navigation & Pagination Customization — always overlaid on a dark image, so use fixed light colors instead of theme-dependent surface colors */
 .hero-swiper .swiper-button-next,
 .hero-swiper .swiper-button-prev {
-  @apply bg-surface border border-outline-variant/30 text-on-surface hover:bg-primary hover:text-on-primary hover:border-primary w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-all duration-300 backdrop-blur-sm !important;
+  @apply bg-white/15 border border-white/30 text-white hover:bg-primary hover:text-on-primary hover:border-primary w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-all duration-300 backdrop-blur-md !important;
   top: 50% !important;
   transform: translateY(-50%) !important;
   bottom: auto !important;
@@ -77,13 +77,21 @@
 
 .hero-swiper .swiper-pagination {
   bottom: 24px !important;
-  left: 48px !important;
+  right: 20px !important;
+  left: auto !important;
   width: auto !important;
-  right: auto !important;
   transform: none !important;
   display: flex !important;
   align-items: center !important;
-  justify-content: flex-start !important;
+  justify-content: flex-end !important;
+}
+
+.hero-swiper .swiper-pagination-bullet {
+  @apply bg-white/40;
+}
+
+.hero-swiper .swiper-pagination-bullet-active {
+  @apply bg-primary;
 }
 
 @media (max-width: 768px) {
@@ -144,6 +152,15 @@
   100% { background-position: 0% 50%; }
 }
 
+/* Global audio player disc thumbnail — spins like a record while playing */
+@keyframes spin-slow {
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 3.5s linear infinite;
+}
+
 /* VIP Badge Rainbow Border & Text */
 .vip-badge-rainbow {
   position: relative;
@@ -178,3 +195,34 @@
   color: white;
   font-weight: 800;
 }
+
+/* Admin/Staff Badge — solid steel-blue, distinct from the rainbow VIP badge */
+.admin-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+}
+
+/* Subtle glowing pulse animation for payment confirmation buttons */
+@keyframes pulse-subtle {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.3), 0 0 0 0 rgba(16, 185, 129, 0.5);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 10px 20px -3px rgba(16, 185, 129, 0.4), 0 0 12px 6px rgba(16, 185, 129, 0.25);
+  }
+}
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s infinite ease-in-out;
+}
+

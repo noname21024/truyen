@@ -15,7 +15,7 @@ const CommentItem: React.FC<CommentItemProps> = ({ user, time, text, likes, avat
       className="flex gap-3 p-3 rounded-sm bg-surface hover:bg-surface-variant transition-colors border border-outline-variant/50"
     >
       <div className="relative shrink-0">
-        <img alt={user} className="w-10 h-10 rounded-sm object-cover border border-outline-variant/50" src={avatar} />
+        <img alt={user} className="w-10 h-10 rounded-sm object-cover border border-outline-variant/50" src={avatar} loading="lazy" decoding="async" />
 
         <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 border border-surface rounded-full" />
       </div>

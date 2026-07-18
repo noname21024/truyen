@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import ViconicIcon from '@/components/ui/ViconicIcon';
 
 interface RankItemProps {
-  id: string;
+  id: string | number;
   rank: number;
   title: string;
   category: string;
@@ -26,7 +26,7 @@ const RankItem: React.FC<RankItemProps> = ({ id, rank, title, category, reads, i
         </div>
 
         <div className="relative w-12 h-12 rounded-[5px] overflow-hidden shrink-0 border border-outline-variant/50">
-          <img alt={title} className="w-full h-full object-cover" src={image} />
+          <img alt={title} className="w-full h-full object-cover" src={image} loading="lazy" decoding="async" />
         </div>
 
 

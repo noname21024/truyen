@@ -2,119 +2,52 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 import novelsDataJson from '@/data/novelsIndex.json';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { NovelService, ChapterService, CoinService, CommentService } from '@/lib/api';
+import { NovelService, ChapterService, CoinService, CommentService, API_BASE_URL } from '@/lib/api';
 import { isUserVIP } from '@/lib/user';
-import { TtsSession, PATH_MAP } from '@realtimex/piper-tts-web';
-import { Play, Pause, SkipForward, SkipBack, Loader2 } from 'lucide-react';
+import { showToast, showCustomConfirm } from '@/lib/dialog';
+import { useAudioPlayer } from '@/contexts/AudioPlayerContext';
 import { STICKER_SETS } from '@/data/stickers';
-
-// Patch XMLHttpRequest to prevent inspector.js from throwing when responseType is 'arraybuffer' or 'blob'
-if (typeof window !== 'undefined' && (window as any).XMLHttpRequest) {
-  try {
-    const proto = XMLHttpRequest.prototype;
-    const textDescriptor = Object.getOwnPropertyDescriptor(proto, 'responseText');
-    if (textDescriptor && textDescriptor.get) {
-      const originalGet = textDescriptor.get;
-      Object.defineProperty(proto, 'responseText', {
-        get: function () {
-          if (this.responseType && this.responseType !== 'text' && this.responseType !== '') {
-            return '';
-          }
-          return originalGet.call(this);
-        },
-        configurable: true,
-        enumerable: true
-      });
-    }
-
-    const xmlDescriptor = Object.getOwnPropertyDescriptor(proto, 'responseXML');
-    if (xmlDescriptor && xmlDescriptor.get) {
-      const originalGetXML = xmlDescriptor.get;
-      Object.defineProperty(proto, 'responseXML', {
-        get: function () {
-          if (this.responseType && this.responseType !== 'document' && this.responseType !== '') {
-            return null;
-          }
-          return originalGetXML.call(this);
-        },
-        configurable: true,
-        enumerable: true
-      });
-    }
-  } catch (e) {
-    console.warn('Failed to patch XMLHttpRequest prototype:', e);
-  }
-}
-
-const R2_BASE = 'https://cdn.pubnihtruyen.com';
-
-// Register Ngọc Huyền model — loaded from R2 at runtime, not bundled
-// PATH_MAP expects a relative path (appended to HF_BASE), so we use a placeholder path
-// and intercept the resulting HuggingFace fetch to redirect to our CDN instead
-if (typeof window !== 'undefined') {
-  (PATH_MAP as any)['vi_VN-ngoc_huyen'] = 'vi/vi_VN/ngoc_huyen/medium/vi_VN-ngoc_huyen.onnx';
-
-  // Configure onnxruntime-web to load WASM from R2 instead of bundled assets
-  // @ts-ignore
-  import('onnxruntime-web').then((ort) => {
-    ort.env.wasm.wasmPaths = `${R2_BASE}/wasm/`;
-  }).catch(() => {});
-
-  // Redirect Hugging Face CDN requests to R2/CDN for ngoc_huyen model
-  const originalFetch = window.fetch;
-  window.fetch = async function (input, init) {
-    const url = typeof input === 'string' ? input : (input as Request).url || '';
-    if (url.includes('huggingface.co') && url.includes('ngoc_huyen.onnx.json')) {
-      return originalFetch(`${R2_BASE}/audio_model/ngoc_huyen.onnx.json`, init);
-    }
-    if (url.includes('huggingface.co') && url.includes('ngoc_huyen.onnx')) {
-      return originalFetch(`${R2_BASE}/audio_model/ngoc_huyen.onnx`, init);
-    }
-    return originalFetch(input, init);
-  };
-}
-
-// Persistent module-level cache for TTS Session and Loader Promise to prevent reloading across chapters
-let globalTtsSession: any = null;
-let globalTtsSessionPromise: Promise<any> | null = null;
-let lookaheadCache: Map<number, Promise<Blob>> = new Map();
 
 const novelsData = novelsDataJson as any[];
 
 type ReadingTheme = 'light' | 'sepia' | 'green' | 'dark';
 type FontType = 'serif' | 'sans' | 'mono';
 
-const THEME_CLASSES: Record<ReadingTheme, { bg: string; text: string; border: string; accentBg: string; buttonBg: string; skeleton: string }> = {
+const THEME_CLASSES: Record<ReadingTheme, { bg: string; text: string; border: string; accentBg: string; buttonBg: string; buttonBorder: string; skeleton: string }> = {
   light: {
     bg: 'bg-white',
     text: 'text-slate-800',
     border: 'border-slate-200/80',
-    accentBg: 'bg-slate-50/90 backdrop-blur-md',
-    buttonBg: 'bg-slate-100 hover:bg-slate-200 text-slate-700',
+    accentBg: 'bg-slate-100/80 backdrop-blur-md',
+    buttonBg: 'bg-white hover:bg-slate-50 text-slate-700',
+    buttonBorder: 'border-slate-300',
     skeleton: 'bg-slate-200/80'
   },
   sepia: {
     bg: 'bg-[#FAF6EB]',
     text: 'text-[#3E2723]',
     border: 'border-[#EBE3CD]',
-    accentBg: 'bg-[#F3EAD3]/90 backdrop-blur-md',
-    buttonBg: 'bg-[#EBE3CD]/60 hover:bg-[#EBE3CD] text-[#5D4037]',
+    accentBg: 'bg-[#EEE3C8]/90 backdrop-blur-md',
+    buttonBg: 'bg-[#FBF7EC] hover:bg-white text-[#5D4037]',
+    buttonBorder: 'border-[#D9C9A0]',
     skeleton: 'bg-[#E0D5BA]/70'
   },
   green: {
     bg: 'bg-[#EBF3E7]',
     text: 'text-[#1B361B]',
     border: 'border-[#D5DEC9]',
-    accentBg: 'bg-[#DDE9D4]/90 backdrop-blur-md',
-    buttonBg: 'bg-[#D5DEC9]/60 hover:bg-[#D5DEC9] text-[#2E4F2E]',
+    accentBg: 'bg-[#D7E5CC]/90 backdrop-blur-md',
+    buttonBg: 'bg-[#F3F8EF] hover:bg-white text-[#2E4F2E]',
+    buttonBorder: 'border-[#B9CDA6]',
     skeleton: 'bg-[#C5D4B8]/60'
   },
   dark: {
     bg: 'bg-[#121316]',
     text: 'text-[#C5C8CE]',
     border: 'border-[#282B30]',
-    accentBg: 'bg-[#1C1D21]/90 backdrop-blur-md',
-    buttonBg: 'bg-[#282B30] hover:bg-[#34383F] text-[#C5C8CE]',
+    accentBg: 'bg-[#1A1B1F]/90 backdrop-blur-md',
+    buttonBg: 'bg-[#33373E] hover:bg-[#3E434B] text-[#C5C8CE]',
+    buttonBorder: 'border-[#454A52]',
     skeleton: 'bg-[#2A2D33]'
   }
 };
@@ -131,6 +64,8 @@ interface Reply {
   time: string;
   text: string;
   avatar: string;
+  isVip?: boolean;
+  isStaff?: boolean;
 }
 
 interface Comment {
@@ -141,6 +76,8 @@ interface Comment {
   likes: number;
   avatar: string;
   likedByUser?: boolean;
+  isVip?: boolean;
+  isStaff?: boolean;
   replies?: Reply[];
 }
 
@@ -161,6 +98,7 @@ type TocEntry = { id: number; chapter_number: number; title: string };
 const ChapterPage: React.FC = () => {
   const { chapterId } = useParams<{ chapterId: string }>();
   const navigate = useNavigate();
+  const { track: audioTrack, playTrack, closeTrack: closeAudioTrack } = useAudioPlayer();
   const { state: routeState } = useLocation();
   const [novel, setNovel] = useState<any | null>(null);
   const [novelLoading, setNovelLoading] = useState(true);
@@ -170,8 +108,11 @@ const ChapterPage: React.FC = () => {
   const [toc, setToc] = useState<TocEntry[]>([]);
   const [chapterData, setChapterData] = useState<{ title: string; content: string } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isFontDropdownOpen, setIsFontDropdownOpen] = useState(false);
+  const [isThemeDropdownOpen, setIsThemeDropdownOpen] = useState(false);
+  const [isFollowed, setIsFollowed] = useState(false);
   const [scrollPercent, setScrollPercent] = useState(0);
   const [comments, setComments] = useState<Comment[]>([]);
   const [newCommentText, setNewCommentText] = useState('');
@@ -182,6 +123,15 @@ const ChapterPage: React.FC = () => {
   const [reportErrorMessage, setReportErrorMessage] = useState('');
   const [showBackToTop, setShowBackToTop] = useState(false);
   const incrementedRef = useRef<string | null>(null);
+  // In-memory cache of fully-resolved chapters (metadata + content), keyed by
+  // chapter id. Populated by the background prefetch below so clicking
+  // "next" on a novel — the overwhelmingly common navigation here — usually
+  // finds everything already sitting in memory instead of waiting on two
+  // sequential network round-trips (metadata, then signed content fetch).
+  const chapterBundleCache = useRef<Map<string, { chap: any; audioUrlValue: string | null; data: any; ts: number }>>(new Map());
+  const prefetchingRef = useRef<Set<string>>(new Set());
+  const latestRequestRef = useRef<string | null>(null);
+  const BUNDLE_TTL_MS = 10 * 60 * 1000;
 
   const mainEditorRef = useRef<HTMLDivElement>(null);
   const replyEditorRef = useRef<HTMLDivElement>(null);
@@ -213,205 +163,25 @@ const ChapterPage: React.FC = () => {
   const [isHeaderControlsVisible, setIsHeaderControlsVisible] = useState(false);
   const originalBarRef = useRef<HTMLDivElement>(null);
 
-  // --- TTS STATE & CONTROLS ---
-  const [isTtsPlaying, setIsTtsPlaying] = useState(false);
-  const [isTtsLoading, setIsTtsLoading] = useState(false);
-  const [isModelLoading, setIsModelLoading] = useState(false);
-  const [ttsError, setTtsError] = useState<string | null>(null);
-  const [currentSentenceIndex, setCurrentSentenceIndex] = useState(-1); // -1 = not started
-  const [ttsSpeed, setTtsSpeed] = useState(1.0);
-
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef = useRef<string | null>(null);
-  const ttsPlayingRef = useRef(false); // ref to control auto-advance (avoids stale closure)
-  const currentSentenceRef = useRef(-1);
-
-  // Helper to load/warmup the global TTS session
-  const getTtsSession = async (
-    onLoadStart: () => void,
-    onLoadEnd: () => void
-  ): Promise<any> => {
-    if (globalTtsSession) {
-      return globalTtsSession;
-    }
-    if (globalTtsSessionPromise) {
-      return globalTtsSessionPromise;
-    }
-
-    onLoadStart();
-    globalTtsSessionPromise = (async () => {
-      try {
-        const session = new TtsSession({
-          voiceId: 'vi_VN-ngoc_huyen',
-          allowLocalModels: true,
-          fallbackStrategy: 'local',
-        });
-        // Warm up model with a space to trigger loading and compiling of WASM
-        await session.predict(" ");
-        globalTtsSession = session;
-        return session;
-      } catch (error) {
-        globalTtsSessionPromise = null;
-        throw error;
-      } finally {
-        onLoadEnd();
-      }
-    })();
-
-    return globalTtsSessionPromise;
-  };
-  // Play a single sentence by index: convert → play → scroll → auto-advance on end
-  const playSentence = async (index: number) => {
-    if (index < 0 || index >= sentencesInfo.length) {
-      // End of chapter
-      ttsPlayingRef.current = false;
-      setIsTtsPlaying(false);
-      lookaheadCache.clear();
-      return;
-    }
-
-    setCurrentSentenceIndex(index);
-    currentSentenceRef.current = index;
-    const audioAlreadyCached = lookaheadCache.has(index);
-    if (!audioAlreadyCached) {
-      setIsTtsLoading(true);
-    }
-    setIsTtsPlaying(true);
-    ttsPlayingRef.current = true;
-    setTtsError(null);
-
-    try {
-      const session = await getTtsSession(
-        () => setIsModelLoading(true),
-        () => setIsModelLoading(false)
-      );
-
-      // Use cached prediction if available, otherwise start one now
-      if (!lookaheadCache.has(index)) {
-        lookaheadCache.set(index, session.predict(sentencesInfo[index].text));
-      }
-
-      // Pre-convert next 2 sentences in background while this one loads/plays
-      for (let ahead = 1; ahead <= 2; ahead++) {
-        const ni = index + ahead;
-        if (ni < sentencesInfo.length && !lookaheadCache.has(ni)) {
-          lookaheadCache.set(ni, session.predict(sentencesInfo[ni].text));
-        }
-      }
-
-      let wavBlob: Blob;
-      try {
-        wavBlob = await lookaheadCache.get(index)!;
-      } catch (e) {
-        lookaheadCache.delete(index);
-        throw e;
-      }
-
-      // Check if user stopped while we were converting
-      if (!ttsPlayingRef.current) return;
-
-      const url = URL.createObjectURL(wavBlob);
-      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = url;
-
-      if (audioRef.current) {
-        audioRef.current.src = url;
-        audioRef.current.playbackRate = ttsSpeed;
-        await audioRef.current.play();
-      }
-
-      setIsTtsLoading(false);
-
-      // Scroll to the paragraph containing this sentence
-      const paragraphIdx = sentencesInfo[index]?.paragraphIndex;
-      if (paragraphIdx !== undefined) {
-        const el = document.getElementById(`p-${paragraphIdx}`);
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      }
-    } catch (error: any) {
-      console.error('Error playing sentence:', error);
-      setTtsError(error?.message || 'Lỗi chuyển đổi.');
-      setIsTtsLoading(false);
-      setIsTtsPlaying(false);
-      ttsPlayingRef.current = false;
-    }
-  };
-
-  const pauseTts = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-    ttsPlayingRef.current = false;
-    setIsTtsPlaying(false);
-  };
-
-  const resumeTts = () => {
-    if (currentSentenceRef.current < 0) {
-      playSentence(0);
-      return;
-    }
-
-    // Resume current audio if paused mid-sentence
-    if (audioRef.current && audioRef.current.src && audioRef.current.paused) {
-      ttsPlayingRef.current = true;
-      audioRef.current.play().then(() => {
-        setIsTtsPlaying(true);
-      }).catch(() => {
-        // If resume fails (e.g. audio already ended), replay current sentence
-        playSentence(currentSentenceRef.current);
-      });
-    } else {
-      playSentence(currentSentenceRef.current);
-    }
-  };
-
-  const stopTts = () => {
-    ttsPlayingRef.current = false;
-    lookaheadCache.clear();
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.removeAttribute('src');
-    }
-    setIsTtsPlaying(false);
-    setIsTtsLoading(false);
-    setCurrentSentenceIndex(-1);
-    currentSentenceRef.current = -1;
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = null;
-    }
-  };
-
-  // Click on a paragraph to jump and play from that paragraph
-  const handleParagraphTtsClick = (paragraphIndex: number) => {
-    const sentenceIdx = sentencesInfo.findIndex(s => s.paragraphIndex === paragraphIndex);
-    if (sentenceIdx !== -1) {
-      playSentence(sentenceIdx);
-    }
-  };
+  // --- Floating controls auto-hide/fade ---
+  const [isControlsHovered, setIsControlsHovered] = useState(false);
+  const [isControlsActive, setIsControlsActive] = useState(true);
 
   useEffect(() => {
-    return () => {
-      ttsPlayingRef.current = false;
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
-      if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current);
-      }
-    };
-  }, []);
-
-  // When audio ends, auto-advance to next sentence
-  const handleAudioEnded = () => {
-    if (ttsPlayingRef.current) {
-      playSentence(currentSentenceRef.current + 1);
-    } else {
-      setIsTtsPlaying(false);
+    if (isControlsHovered || isThemeDropdownOpen || isFontDropdownOpen) {
+      setIsControlsActive(true);
+      return;
     }
-  };
+
+    const timer = setTimeout(() => {
+      setIsControlsActive(false);
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, [isControlsHovered, isThemeDropdownOpen, isFontDropdownOpen]);
+
+  // --- Chapter audio (uploaded .opus link, not TTS) ---
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
   // Load current user session
   useEffect(() => {
@@ -420,6 +190,16 @@ const ChapterPage: React.FC = () => {
       try { setCurrentUser(JSON.parse(saved)); } catch (e) { }
     }
   }, []);
+
+  // Same free_up_to formula the backend uses, computed client-side so
+  // anonymous readers see the correct lock icons too (see DetailPage.tsx
+  // for the full explanation — this used to stay stuck at the useState
+  // default until a login-gated API call updated it).
+  useEffect(() => {
+    if (novel?.is_vip && novel?.total_chapters) {
+      setFreeUpTo(Math.max(1, Math.floor(novel.total_chapters * 0.10)));
+    }
+  }, [novel?.is_vip, novel?.total_chapters]);
 
   // Fetch unlocked chapters + VIP status when this is a VIP novel and user is logged in
   useEffect(() => {
@@ -443,11 +223,65 @@ const ChapterPage: React.FC = () => {
     } catch {}
   }, [currentUser]);
 
+  // Load/persist follow status for this novel
+  useEffect(() => {
+    if (storySlug && currentUser) {
+      setIsFollowed(!!localStorage.getItem(`follow_novel_${storySlug}_user_${currentUser.name}`));
+    } else {
+      setIsFollowed(false);
+    }
+  }, [storySlug, currentUser]);
+
+  const handleFollowToggle = () => {
+    if (!currentUser) {
+      showToast('Vui lòng đăng nhập tài khoản để theo dõi truyện!');
+      return;
+    }
+    const nextState = !isFollowed;
+    setIsFollowed(nextState);
+    if (nextState) {
+      localStorage.setItem(`follow_novel_${storySlug}_user_${currentUser.name}`, '1');
+      showToast('Đã thêm bộ truyện vào tủ sách theo dõi!');
+    } else {
+      localStorage.removeItem(`follow_novel_${storySlug}_user_${currentUser.name}`);
+      showToast('Đã hủy theo dõi bộ truyện.');
+    }
+  };
+
   const isLocked = novel?.is_vip && currentChapterNumber > freeUpTo && !isVIPMember && !unlockedChapters.includes(currentChapterNumber);
 
   const curTocIdx = toc.findIndex(c => c.chapter_number === currentChapterNumber);
   const prevEntry = curTocIdx > 0 ? toc[curTocIdx - 1] : null;
   const nextEntry = curTocIdx >= 0 && curTocIdx < toc.length - 1 ? toc[curTocIdx + 1] : null;
+
+  // Push this chapter's audio into the global player so it keeps playing across page navigation.
+  // Deliberately does NOT depend on `audioTrack` — that value changes every time playTrack runs,
+  // so including it here would re-trigger this same effect forever (infinite render loop).
+  useEffect(() => {
+    if (!audioUrl || !novel || !currentChapterId || isLocked) return;
+    playTrack({
+      chapterId: currentChapterId,
+      storySlug,
+      storyTitle: novel.title,
+      chapterLabel: `Chương ${currentChapterNumber}`,
+      cover: novel.cover,
+      src: audioUrl,
+      prevChapterId: prevEntry?.id ?? null,
+      nextChapterId: nextEntry?.id ?? null,
+    });
+  }, [audioUrl, novel?.title, novel?.cover, currentChapterId, currentChapterNumber, storySlug, prevEntry?.id, nextEntry?.id, playTrack, isLocked]);
+
+  // This chapter has no audio of its own — if we've navigated into a different novel,
+  // stop whatever that other story was playing. Separate from the effect above so that
+  // updates to the currently-playing track never cause this to re-fire on its own.
+  useEffect(() => {
+    if (audioUrl || !storySlug) return;
+    if (audioTrack && audioTrack.storySlug !== storySlug) {
+      closeAudioTrack();
+    }
+  }, [audioUrl, storySlug]);
+
+
 
   const handleUnlock = async () => {
     if (!currentChapterId || isUnlocking) return;
@@ -527,45 +361,6 @@ const ChapterPage: React.FC = () => {
       .filter(p => p.length > 0);
   }, [chapterData?.content]);
 
-  // Split entire chapter content into list of sentences with paragraph mapping
-  const sentencesInfo = useMemo(() => {
-    if (paragraphs.length === 0) return [];
-    const flat: { text: string; paragraphIndex: number }[] = [];
-    paragraphs.forEach((p, pIdx) => {
-      // Split sentence endpoints (. ! ?) keeping delimiters, then filter out empty ones
-      const rawSentences = p
-        .replace(/([.!?]+)(?=\s|$)/g, "$1|")
-        .split(/[|\n]/)
-        .map(s => s.trim())
-        .filter(s => s.length > 0);
-
-      rawSentences.forEach(sText => {
-        flat.push({
-          text: sText,
-          paragraphIndex: pIdx
-        });
-      });
-    });
-    return flat;
-  }, [paragraphs]);
-
-  // Compute active paragraph index for highlighting based on active sentence
-  const currentParagraphIndex = useMemo(() => {
-    if (currentSentenceIndex < 0) return -1;
-    return sentencesInfo[currentSentenceIndex]?.paragraphIndex ?? -1;
-  }, [sentencesInfo, currentSentenceIndex]);
-
-  // Autoplay TTS if coming from skip previous/next buttons
-  useEffect(() => {
-    if (!loading && sentencesInfo.length > 0) {
-      const autoplay = localStorage.getItem('tts-autoplay');
-      if (autoplay === 'true') {
-        localStorage.removeItem('tts-autoplay');
-        playSentence(0);
-      }
-    }
-  }, [loading, sentencesInfo]);
-
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -574,6 +369,11 @@ const ChapterPage: React.FC = () => {
       // Font controls dropdown
       if (isFontDropdownOpen && !target.closest('.font-controls-container')) {
         setIsFontDropdownOpen(false);
+      }
+
+      // Theme controls dropdown
+      if (isThemeDropdownOpen && !target.closest('.theme-controls-container')) {
+        setIsThemeDropdownOpen(false);
       }
 
       // TOC dropdown
@@ -601,7 +401,7 @@ const ChapterPage: React.FC = () => {
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [isFontDropdownOpen, isDropdownOpen, isMainStickerOpen, replyStickerOpenId, activeCommentMenuId]);
+  }, [isFontDropdownOpen, isThemeDropdownOpen, isDropdownOpen, isMainStickerOpen, replyStickerOpenId, activeCommentMenuId]);
 
   // Load comments from server for this chapter
   useEffect(() => {
@@ -618,6 +418,8 @@ const ChapterPage: React.FC = () => {
           likes: 0,
           avatar: c.user_avatar || '',
           likedByUser: liked.includes(c.id),
+          isVip: !!c.user_is_vip,
+          isStaff: !!c.user_is_staff,
           replies: [],
         }));
         const roots: Comment[] = [];
@@ -706,13 +508,15 @@ const ChapterPage: React.FC = () => {
         likes: 0,
         avatar: created.user_avatar || currentUser.avatar,
         likedByUser: false,
+        isVip: !!created.user_is_vip,
+        isStaff: !!created.user_is_staff,
         replies: [],
       };
       setComments(prev => [newComment, ...prev]);
       setNewCommentText('');
       if (mainEditorRef.current) mainEditorRef.current.innerHTML = '';
     } catch {
-      alert("Đăng bình luận thất bại. Vui lòng đăng nhập và thử lại!");
+      showToast("Đăng bình luận thất bại. Vui lòng đăng nhập và thử lại!");
     } finally {
       setCommentSubmitting(false);
     }
@@ -722,7 +526,7 @@ const ChapterPage: React.FC = () => {
     e.preventDefault();
     if (!replyText.trim() || !currentChapterId) return;
     if (!currentUser) {
-      alert("Vui lòng đăng nhập để phản hồi cảm nhận!");
+      showToast("Vui lòng đăng nhập để phản hồi cảm nhận!");
       return;
     }
     try {
@@ -733,6 +537,8 @@ const ChapterPage: React.FC = () => {
         time: "Vừa xong",
         text: created.content,
         avatar: created.user_avatar || currentUser.avatar,
+        isVip: !!created.user_is_vip,
+        isStaff: !!created.user_is_staff,
       };
       setComments(prev => prev.map(c =>
         c.id === commentId ? { ...c, replies: [...(c.replies || []), newReply] } : c
@@ -741,13 +547,13 @@ const ChapterPage: React.FC = () => {
       setReplyingToId(null);
       if (replyEditorRef.current) replyEditorRef.current.innerHTML = '';
     } catch {
-      alert("Phản hồi thất bại. Vui lòng đăng nhập và thử lại!");
+      showToast("Phản hồi thất bại. Vui lòng đăng nhập và thử lại!");
     }
   };
 
   const handleLikeComment = (commentId: number) => {
     if (!currentUser) {
-      alert("Vui lòng đăng nhập tài khoản để thích bình luận!");
+      showToast("Vui lòng đăng nhập tài khoản để thích bình luận!");
       return;
     }
     const likedKey = `liked_chapter_comments_${currentChapterId}`;
@@ -762,16 +568,26 @@ const ChapterPage: React.FC = () => {
     ));
   };
 
-  const handleDeleteComment = async (commentId: number) => {
-    if (window.confirm("Bạn có chắc chắn muốn xóa bình luận này?")) {
-      try {
-        await CommentService.deleteChapterComment(commentId);
-        setComments(prev => prev.filter(c => c.id !== commentId));
-      } catch {
-        alert("Xóa bình luận thất bại. Bạn chỉ có thể xóa bình luận của chính mình.");
+  const handleDeleteComment = (commentId: number, parentId?: number) => {
+    showCustomConfirm(
+      "Xóa bình luận",
+      "Bạn có chắc chắn muốn xóa bình luận này?",
+      async () => {
+        try {
+          await CommentService.deleteChapterComment(commentId);
+          if (parentId) {
+            setComments(prev => prev.map(c =>
+              c.id === parentId ? { ...c, replies: (c.replies || []).filter(r => r.id !== commentId) } : c
+            ));
+          } else {
+            setComments(prev => prev.filter(c => c.id !== commentId));
+          }
+        } catch {
+          showToast("Xóa bình luận thất bại. Bạn chỉ có thể xóa bình luận của chính mình.");
+        }
       }
-      setActiveCommentMenuId(null);
-    }
+    );
+    setActiveCommentMenuId(null);
   };
 
   const handleStartEdit = (commentId: number, currentText: string) => {
@@ -780,20 +596,26 @@ const ChapterPage: React.FC = () => {
     setActiveCommentMenuId(null);
   };
 
-  const handleSaveEdit = async (commentId: number) => {
+  const handleSaveEdit = async (commentId: number, parentId?: number) => {
     if (!editingCommentText.trim()) {
-      alert("Nội dung bình luận không được để trống!");
+      showToast("Nội dung bình luận không được để trống!");
       return;
     }
     try {
       const updated = await CommentService.editChapterComment(commentId, editingCommentText);
-      setComments(prev => prev.map(c =>
-        c.id === commentId ? { ...c, text: updated.content } : c
-      ));
+      if (parentId) {
+        setComments(prev => prev.map(c =>
+          c.id === parentId ? { ...c, replies: (c.replies || []).map(r => r.id === commentId ? { ...r, text: updated.content } : r) } : c
+        ));
+      } else {
+        setComments(prev => prev.map(c =>
+          c.id === commentId ? { ...c, text: updated.content } : c
+        ));
+      }
       setEditingCommentId(null);
       setEditingCommentText('');
     } catch {
-      alert("Sửa bình luận thất bại. Bạn chỉ có thể sửa bình luận của chính mình.");
+      showToast("Sửa bình luận thất bại. Bạn chỉ có thể sửa bình luận của chính mình.");
     }
   };
 
@@ -874,12 +696,13 @@ const ChapterPage: React.FC = () => {
     NovelService.getNovelDetail(storySlug)
       .then(data => {
         setNovel({
-          id: data.slug,
+          id: data.id,
           slug: data.slug,
           title: data.title,
           cover: data.cover_url,
           folder: data.slug,
           is_vip: data.is_vip,
+          total_chapters: data.total_chapters,
         });
         if (data.toc && data.toc.length > 0) {
           setToc(data.toc);
@@ -899,32 +722,125 @@ const ChapterPage: React.FC = () => {
       .finally(() => setNovelLoading(false));
   }, [storySlug]);
 
-  // Load chapter content
-  useEffect(() => {
-    if (!chapterId) return;
-    setLoading(true);
-    stopTts();
+  // Resolves one chapter's metadata + content. Shared by the main loader
+  // below and the background prefetch, so a chapter warmed by prefetch and
+  // one loaded on demand go through identical caching logic.
+  const loadChapterBundle = async (id: string) => {
+    const chap = await ChapterService.getChapterDetail(id);
 
-    ChapterService.getChapterDetail(chapterId)
-      .then(chap => {
+    let audioUrlValue: string | null = null;
+    if (chap.has_audio && chap.audio_url) {
+      audioUrlValue = chap.audio_url;
+    } else if (chap.has_audio) {
+      // Paid chapter — audio_url comes back null from the API on purpose
+      // (see is_paid_chapter in the backend). Stream it through the
+      // authenticated proxy instead; <audio> can't send an Authorization
+      // header, so the token travels as a query param here.
+      const token = localStorage.getItem('auth_token');
+      audioUrlValue = token ? `${API_BASE_URL}chapters/${chap.id}/audio/?token=${encodeURIComponent(token)}` : null;
+    }
+
+    let data;
+    if (chap.content_url) {
+      // Keyed by chapter id, not the URL — content_url carries a signature
+      // that's different on every fetch, so keying by the URL itself never
+      // hit this cache even for a chapter read minutes ago.
+      const cacheKey = `cc:${chap.id}`;
+      try {
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) {
+          const cached = JSON.parse(raw);
+          if (Date.now() < cached.exp) data = cached.data;
+        }
+      } catch {}
+
+      if (data === undefined) {
+        // Fetch directly from Cloudflare CDN edge (bypasses Django proxy → saves ~700ms)
+        const res = await fetch(chap.content_url);
+        if (!res.ok) throw new Error(`Content fetch failed: ${res.status}`);
+        data = await res.json();
+
+        // Cache for 30 minutes in localStorage
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ data, exp: Date.now() + 30 * 60 * 1000 }));
+        } catch {}
+      }
+    } else {
+      // Fallback to backend proxy only if no direct URL
+      data = await ChapterService.getChapterContent(chap.id);
+    }
+
+    return { chap, audioUrlValue, data };
+  };
+
+  const runLoad = (id: string) => {
+    setLoading(true);
+    setLoadError(false);
+    setAudioUrl(null);
+    // Nav buttons stay clickable even mid-load (no `disabled={loading}`) so
+    // a slow chapter never traps the reader — this guard is what keeps that
+    // safe: if the reader clicks again before this request finishes, its
+    // result is stale by the time it resolves and must not overwrite
+    // whatever the latest click already kicked off.
+    latestRequestRef.current = id;
+
+    const warm = chapterBundleCache.current.get(id);
+    const bundlePromise = (warm && Date.now() - warm.ts < BUNDLE_TTL_MS)
+      ? Promise.resolve(warm)
+      : loadChapterBundle(id);
+    chapterBundleCache.current.delete(id);
+
+    bundlePromise
+      .then(({ chap, audioUrlValue, data }) => {
+        if (latestRequestRef.current !== id) return; // superseded by a newer navigation
+
+        // Apply chapter number, title, audio and content together so the
+        // header/dropdown never shows the new chapter number while the
+        // reading pane still shows the previous one's content.
         setCurrentChapterId(chap.id);
         setCurrentChapterNumber(chap.chapter_number);
+        document.title = `${chap.title || `Chương ${chap.chapter_number}`} - ${chap.story_title} | Pub Nih Truyện`;
         if (chap.story_slug) setStorySlug(chap.story_slug);
-        return ChapterService.getChapterContent(chap.id);
-      })
-      .then(data => {
+        setAudioUrl(audioUrlValue);
         setChapterData(data);
         setLoading(false);
         window.scrollTo(0, 0);
-        if (incrementedRef.current !== chapterId) {
-          incrementedRef.current = chapterId;
-          ChapterService.incrementViews(chapterId).catch(() => {});
+        if (incrementedRef.current !== id) {
+          incrementedRef.current = id;
+          ChapterService.incrementViews(id).catch(() => {});
+        }
+
+        // Warm the next chapter in the background — by far the most common
+        // click from here is "next", so this is what actually makes that
+        // click feel instant instead of repeating both round-trips.
+        const curIdx = toc.findIndex(t => t.chapter_number === chap.chapter_number);
+        const nextId = curIdx >= 0 && curIdx < toc.length - 1 ? String(toc[curIdx + 1].id) : null;
+        if (nextId && !chapterBundleCache.current.has(nextId) && !prefetchingRef.current.has(nextId)) {
+          prefetchingRef.current.add(nextId);
+          loadChapterBundle(nextId)
+            .then(bundle => chapterBundleCache.current.set(nextId, { ...bundle, ts: Date.now() }))
+            .catch(() => {})
+            .finally(() => prefetchingRef.current.delete(nextId));
         }
       })
       .catch(err => {
+        if (latestRequestRef.current !== id) return; // a newer navigation already took over
+        // A failed fetch here is almost always either a network hiccup or the
+        // reader (or the prefetcher, on their behalf) briefly tripping
+        // Cloudflare's rate limit — that block response can't carry CORS
+        // headers, so the browser hides the real 429 and this looks like a
+        // generic failure. Surface something actionable either way instead
+        // of silently leaving the reading pane blank.
         console.warn("Failed to load chapter from API", err);
         setLoading(false);
+        setLoadError(true);
       });
+  };
+
+  // Load chapter content
+  useEffect(() => {
+    if (!chapterId) return;
+    runLoad(chapterId);
   }, [chapterId]);
 
   const parsedTitle = useMemo(() => {
@@ -942,9 +858,10 @@ const ChapterPage: React.FC = () => {
   useEffect(() => {
     if (!storySlug || !currentChapterNumber || !chapterData?.title) return;
     try {
+      const novelIdentifier = novel?.id ?? storySlug;
       const historyStr = localStorage.getItem('reading_history_list') || '[]';
       const history = JSON.parse(historyStr) as any[];
-      const filtered = history.filter((item: any) => item.novelId !== storySlug);
+      const filtered = history.filter((item: any) => item.novelId !== novelIdentifier);
 
       let novelTitle = novel?.title;
       if (!novelTitle) {
@@ -953,7 +870,7 @@ const ChapterPage: React.FC = () => {
       }
 
       const newItem = {
-        novelId: storySlug,
+        novelId: novelIdentifier,
         novelTitle,
         chapterNumber: currentChapterNumber,
         chapterTitle: chapterData.title,
@@ -966,7 +883,7 @@ const ChapterPage: React.FC = () => {
     } catch (e) {
       console.error("Failed to save reading history list:", e);
     }
-  }, [storySlug, currentChapterNumber, chapterData?.title, novel?.title]);
+  }, [storySlug, currentChapterNumber, chapterData?.title, novel?.title, novel?.id]);
 
   if (!novel && !loading && !novelLoading) {
     return (
@@ -978,6 +895,102 @@ const ChapterPage: React.FC = () => {
   }
 
   const currentTheme = THEME_CLASSES[theme];
+
+  // Compact control bar: Home + TOC menu (left), Prev/chapter-select/Next (center), Follow (right)
+  const renderControlBar = (bare: boolean = false) => (
+    <div className={bare
+      ? `${currentTheme.accentBg} rounded-md flex items-center justify-between gap-1.5 sm:gap-3 w-full`
+      : `border ${currentTheme.border} ${currentTheme.accentBg} rounded-md p-2.5 sm:p-3 flex items-center justify-between gap-1.5 sm:gap-3 shadow-md w-full`
+    }>
+
+      {/* Left: Home + Menu (TOC) */}
+      <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+        <Link
+          to="/"
+          className={`w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center rounded-sm border ${currentTheme.buttonBg} ${currentTheme.buttonBorder} shadow-sm transition-all active:scale-95 shrink-0`}
+          title="Trang chủ"
+        >
+          <ViconicIcon name="home" size={16} className="shrink-0" />
+        </Link>
+        <Link
+          to={`/detail/${novel?.id ?? storySlug}`}
+          className={`w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center rounded-sm border ${currentTheme.buttonBg} ${currentTheme.buttonBorder} shadow-sm transition-all active:scale-95 shrink-0`}
+          title="Danh sách chương"
+        >
+          <ViconicIcon name="menu" size={16} className="shrink-0" />
+        </Link>
+      </div>
+
+      {/* Center: Prev / Chapter select / Next */}
+      <div className="flex items-center gap-1 sm:gap-2 flex-1 justify-center min-w-0">
+        <button
+          onClick={() => prevEntry && navigate(`/chapter/${prevEntry.id}`, { state: { storySlug } })}
+          disabled={!prevEntry}
+          className="w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center rounded-full bg-primary text-on-primary shadow-sm transition-all active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+          title="Chương trước"
+        >
+          <ViconicIcon name="arrow_back" size={15} className="shrink-0" />
+        </button>
+
+        <div className="relative toc-dropdown-container min-w-0 max-w-[76px] sm:max-w-[200px] flex-1">
+          <button
+            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+            className={`flex items-center justify-center gap-1 px-2 sm:px-3 py-2 sm:py-2.5 rounded-sm border font-bold text-[11px] sm:text-xs ${currentTheme.buttonBg} ${currentTheme.buttonBorder} shadow-sm w-full truncate`}
+          >
+            {loading ? (
+              <span className={`h-3 w-10 ${currentTheme.skeleton} rounded animate-pulse inline-block`} />
+            ) : (
+              <span className="truncate select-none">
+                <span className="sm:hidden">C.{currentChapterNumber}</span>
+                <span className="hidden sm:inline">Chương {currentChapterNumber}</span>
+              </span>
+            )}
+            <ViconicIcon name="arrow_drop_down" size={16} className="shrink-0" />
+          </button>
+
+          {isDropdownOpen && (
+            <div className={`absolute top-full left-1/2 -translate-x-1/2 mt-2 w-72 max-w-[calc(100vw-2rem)] max-h-[50vh] overflow-y-auto ${theme === 'dark' ? 'bg-[#1C1D21] text-[#C5C8CE] border-[#282B30]' : 'bg-white text-slate-800 border-slate-200'} border shadow-xl rounded-md z-50 flex flex-col overscroll-contain`}>
+              {toc.map((entry, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => { setIsDropdownOpen(false); navigate(`/chapter/${entry.id}`, { state: { storySlug } }); }}
+                  className={`text-left px-4 py-2.5 hover:bg-primary/5 transition-colors border-b last:border-b-0 text-xs ${theme === 'dark' ? 'border-[#282B30]' : 'border-slate-100'} ${entry.chapter_number === currentChapterNumber ? 'font-bold text-primary bg-primary/5 border-l-2 border-l-primary' : 'border-l-2 border-l-transparent'}`}
+                >
+                  {entry.title}
+                </button>
+              ))}
+              {toc.length === 0 && (
+                <div className="px-4 py-3 text-xs text-center opacity-70">Không có dữ liệu</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={() => nextEntry && navigate(`/chapter/${nextEntry.id}`, { state: { storySlug } })}
+          disabled={!nextEntry}
+          className="w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center rounded-full bg-primary text-on-primary shadow-sm transition-all active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+          title="Chương sau"
+        >
+          <ViconicIcon name="arrow_forward" size={15} className="shrink-0" />
+        </button>
+      </div>
+
+      {/* Right: Follow */}
+      <button
+        onClick={handleFollowToggle}
+        className={`flex items-center gap-1.5 px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-full font-bold text-xs transition-all active:scale-95 shrink-0 border ${
+          isFollowed
+            ? 'bg-primary text-on-primary border-primary hover:bg-primary/90 shadow-sm'
+            : `${currentTheme.buttonBg} ${currentTheme.buttonBorder}`
+        }`}
+        title={isFollowed ? 'Đã theo dõi truyện này' : 'Theo dõi truyện này'}
+      >
+        <ViconicIcon name="favorite" size={14} className="shrink-0" />
+        <span className="hidden sm:inline">{isFollowed ? 'Đã theo dõi' : 'Theo dõi'}</span>
+      </button>
+    </div>
+  );
 
   // Helper to render novel text cleanly, mapping parsed paragraphs
   const renderChapterContent = () => {
@@ -1006,17 +1019,11 @@ const ChapterPage: React.FC = () => {
             }
           }
 
-          const isCurrentParagraph = (isTtsPlaying || isTtsLoading) && index === currentParagraphIndex;
-
           return (
             <p
               id={`p-${index}`}
               key={index}
-              onClick={() => handleParagraphTtsClick(index)}
-              className={`tracking-wide transition-[background-color,color,padding-left,border-color] duration-300 rounded-sm cursor-pointer hover:bg-primary/[0.03] ${isCurrentParagraph
-                  ? 'bg-primary/5 text-primary border-l-2 border-l-primary pl-3 py-0.5'
-                  : ''
-                }`}
+              className="tracking-wide"
               dangerouslySetInnerHTML={hasHTML ? { __html: trimmed } : undefined}
             >
               {hasHTML ? undefined : trimmed}
@@ -1042,7 +1049,102 @@ const ChapterPage: React.FC = () => {
         style={{ width: `${scrollPercent}%` }}
       />
 
-      <div className="max-w-[860px] mx-auto px-6 pt-6">
+      {/* Floating reading tools — fixed beside the content column, identical position/behavior at every viewport width */}
+      <div
+        className={`fixed z-40 flex flex-col gap-2.5 transition-opacity ease-in-out ${isControlsActive ? 'opacity-100 duration-200' : 'opacity-50 duration-1000'}`}
+        style={{ right: 'max(0.625rem, calc((100vw - 860px) / 2 - 80px))', top: '38%' }}
+        onMouseEnter={() => setIsControlsHovered(true)}
+        onMouseLeave={() => setIsControlsHovered(false)}
+      >
+        <div className="relative theme-controls-container">
+          <button
+            onClick={() => { setIsThemeDropdownOpen(!isThemeDropdownOpen); setIsFontDropdownOpen(false); }}
+            className={`w-12 h-12 sm:w-14 sm:h-14 rounded-xl border flex flex-col items-center justify-center gap-0.5 transition-all shadow-md active:scale-95 ${currentTheme.buttonBg} ${currentTheme.buttonBorder}`}
+            title="Đổi giao diện đọc"
+          >
+            <ViconicIcon name="palette" size={17} className="shrink-0" />
+            <span className="text-[8px] sm:text-[8.5px] font-bold leading-none text-center px-0.5">Giao diện</span>
+          </button>
+
+          {isThemeDropdownOpen && (
+            <div className={`absolute right-full mr-2.5 top-0 p-3 w-max ${theme === 'dark' ? 'bg-[#1C1D21] text-[#C5C8CE] border-[#282B30]' : 'bg-white text-slate-800 border-slate-200'} border shadow-xl rounded-md z-50 flex items-center gap-2.5`}>
+              {(['light', 'sepia', 'green', 'dark'] as ReadingTheme[]).map(t => {
+                const colors = {
+                  light: 'bg-white border-slate-300',
+                  sepia: 'bg-[#F5EEDC] border-[#DCD3B9]',
+                  green: 'bg-[#E1EDDB] border-[#C3D5B9]',
+                  dark: 'bg-[#1C1D21] border-[#2E3238]',
+                };
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setTheme(t)}
+                    className={`w-8 h-8 rounded-full border transition-transform hover:scale-110 active:scale-95 ${colors[t]} ${theme === t ? 'scale-110 ring-2 ring-primary ring-offset-2 dark:ring-offset-[#121316]' : 'opacity-80'}`}
+                    title={`Chủ đề ${t}`}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="relative font-controls-container">
+          <button
+            onClick={() => { setIsFontDropdownOpen(!isFontDropdownOpen); setIsThemeDropdownOpen(false); }}
+            className={`w-12 h-12 sm:w-14 sm:h-14 rounded-xl border flex flex-col items-center justify-center gap-0.5 transition-all shadow-md active:scale-95 ${currentTheme.buttonBg} ${currentTheme.buttonBorder}`}
+            title="Cài đặt phông chữ và kích thước"
+          >
+            <ViconicIcon name="format_size" size={17} className="shrink-0" />
+            <span className="text-[8px] sm:text-[8.5px] font-bold leading-none text-center px-0.5">Cỡ chữ</span>
+          </button>
+
+          {isFontDropdownOpen && (
+            <div className={`absolute right-full mr-2.5 top-0 w-64 max-w-[calc(100vw-2rem)] p-4 ${theme === 'dark' ? 'bg-[#1C1D21] text-[#C5C8CE] border-[#282B30]' : 'bg-white text-slate-800 border-slate-200'} border shadow-xl rounded-md z-50 flex flex-col gap-4 overscroll-contain`}>
+              {/* Font Size slider */}
+              <div>
+                <div className="flex justify-between items-center mb-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider opacity-85">Kích thước chữ</span>
+                  <span className="font-bold text-xs text-primary">{fontSize}px</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] opacity-60">A-</span>
+                  <input
+                    type="range"
+                    min={14}
+                    max={32}
+                    step={2}
+                    value={fontSize}
+                    onChange={(e) => setFontSize(parseInt(e.target.value, 10))}
+                    className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
+                  />
+                  <span className="text-xs font-bold opacity-80">A+</span>
+                </div>
+              </div>
+
+              {/* Font Type Selection */}
+              <div>
+                <span className="block text-[10px] font-bold uppercase tracking-wider mb-2 opacity-85">Kiểu chữ</span>
+                <div className="grid grid-cols-3 gap-1">
+                  {(['serif', 'sans', 'mono'] as FontType[]).map(type => (
+                    <button
+                      key={type}
+                      onClick={() => setFontType(type)}
+                      className={`text-[10px] font-bold py-1.5 rounded-sm border uppercase transition-all ${fontType === type
+                        ? 'border-primary text-primary bg-primary/10'
+                        : 'border-slate-200 dark:border-slate-700 opacity-70 hover:opacity-100 hover:border-slate-300'
+                        }`}
+                    >
+                      {type === 'serif' ? 'Book' : type === 'sans' ? 'Clean' : 'Code'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="max-w-[860px] mx-auto px-4 sm:px-6 pt-6">
         {/* Breadcrumbs */}
         <nav aria-label="Breadcrumb" className="flex items-center text-xs opacity-75 mb-6 truncate min-w-0">
           <ol className="inline-flex items-center space-x-1 md:space-x-2 truncate">
@@ -1064,7 +1166,11 @@ const ChapterPage: React.FC = () => {
             </li>
             <li aria-current="page" className="shrink-0 min-w-0 flex items-center">
               <ViconicIcon name="chevron_right" size={14} className="mx-1 opacity-50 shrink-0" />
-              <span className="font-bold truncate">Chương {currentChapterNumber}</span>
+              {loading ? (
+                <span className={`h-3.5 ${currentTheme.skeleton} rounded w-16 animate-pulse inline-block`} />
+              ) : (
+                <span className="font-bold truncate">Chương {currentChapterNumber}</span>
+              )}
             </li>
           </ol>
         </nav>
@@ -1081,7 +1187,7 @@ const ChapterPage: React.FC = () => {
             <>
               <div className="flex items-center gap-2 mb-3">
                 <Link
-                  to={`/detail/${storySlug}`}
+                  to={`/detail/${novel?.id ?? storySlug}`}
                   className="hover:text-primary transition-colors text-xs font-bold opacity-60 tracking-wider"
                 >
                   {novel?.title}
@@ -1101,131 +1207,7 @@ const ChapterPage: React.FC = () => {
 
         {/* Premium Sticky Control Bar */}
         <div ref={originalBarRef} className="mb-8">
-          <div className={`border ${currentTheme.border} ${currentTheme.accentBg} rounded-md p-3.5 flex items-center justify-between gap-4 shadow-md w-full`}>
-
-            {/* Left: Font controls */}
-            <div className="flex items-center justify-start relative shrink-0 gap-2 font-controls-container">
-              <button
-                onClick={() => setIsFontDropdownOpen(!isFontDropdownOpen)}
-                className={`flex items-center space-x-1 px-3 py-2 sm:space-x-1.5 sm:px-4.5 sm:py-2.5 rounded-sm transition-all font-bold text-xs ${currentTheme.buttonBg} border ${currentTheme.border} shadow-sm`}
-                title="Cài đặt phông chữ và kích thước"
-              >
-                <ViconicIcon name="format_size" size={14} className="shrink-0" />
-                <span className="hidden sm:inline">Cỡ chữ & Phông</span>
-                <ViconicIcon name="arrow_drop_down" size={16} className="shrink-0" />
-              </button>
-
-              {isFontDropdownOpen && (
-                <div className={`absolute top-full left-0 mt-2 w-64 p-4 ${theme === 'dark' ? 'bg-[#1C1D21] text-[#C5C8CE] border-[#282B30]' : 'bg-white text-slate-800 border-slate-200'} border shadow-xl rounded-md z-50 flex flex-col gap-4 overscroll-contain`}>
-
-                  {/* Font Size slider */}
-                  <div>
-                    <div className="flex justify-between items-center mb-1.5">
-                      <span className="text-[10px] font-bold uppercase tracking-wider opacity-85">Kích thước chữ</span>
-                      <span className="font-bold text-xs text-primary">{fontSize}px</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] opacity-60">A-</span>
-                      <input
-                        type="range"
-                        min={14}
-                        max={32}
-                        step={2}
-                        value={fontSize}
-                        onChange={(e) => setFontSize(parseInt(e.target.value, 10))}
-                        className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
-                      />
-                      <span className="text-xs font-bold opacity-80">A+</span>
-                    </div>
-                  </div>
-
-                  {/* Font Type Selection */}
-                  <div>
-                    <span className="block text-[10px] font-bold uppercase tracking-wider mb-2 opacity-85">Kiểu chữ</span>
-                    <div className="grid grid-cols-3 gap-1">
-                      {(['serif', 'sans', 'mono'] as FontType[]).map(type => (
-                        <button
-                          key={type}
-                          onClick={() => setFontType(type)}
-                          className={`text-[10px] font-bold py-1.5 rounded-sm border uppercase transition-all ${fontType === type
-                            ? 'border-primary text-primary bg-primary/10'
-                            : 'border-slate-200 dark:border-slate-700 opacity-70 hover:opacity-100 hover:border-slate-300'
-                            }`}
-                        >
-                          {type === 'serif' ? 'Book' : type === 'sans' ? 'Clean' : 'Code'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                </div>
-              )}
-            </div>
-
-            {/* Center: Table of Contents Dropdown */}
-            <div className="flex justify-center flex-grow max-w-[150px] sm:max-w-[280px] md:max-w-[340px]">
-              <div className="relative w-full toc-dropdown-container">
-                <button
-                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className={`flex items-center space-x-1 px-3 py-2 sm:space-x-1.5 sm:px-4.5 sm:py-2.5 rounded-sm transition-all font-bold text-xs ${currentTheme.buttonBg} border ${currentTheme.border} shadow-sm w-full justify-between`}
-                >
-                  <div className="flex items-center space-x-1.5 truncate mr-1.5">
-                    <ViconicIcon name="list" size={14} className="shrink-0" />
-                    <span className="truncate select-none hidden sm:inline">{chapterData?.title || `Chương ${currentChapterNumber}`}</span>
-                    <span className="truncate select-none sm:hidden">Chương {currentChapterNumber}</span>
-                  </div>
-                  <ViconicIcon name="arrow_drop_down" size={16} className="shrink-0" />
-                </button>
-
-                {isDropdownOpen && (
-                  <div className={`absolute top-full left-0 w-full mt-2 max-h-[50vh] overflow-y-auto ${theme === 'dark' ? 'bg-[#1C1D21] text-[#C5C8CE] border-[#282B30]' : 'bg-white text-slate-800 border-slate-200'
-                    } border shadow-xl rounded-md z-50 flex flex-col overscroll-contain`}>
-                    {toc.map((entry, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          setIsDropdownOpen(false);
-                          navigate(`/chapter/${entry.id}`, { state: { storySlug } });
-                        }}
-                        className={`text-left px-4 py-2.5 hover:bg-primary/5 transition-colors border-b last:border-b-0 text-xs ${theme === 'dark' ? 'border-[#282B30]' : 'border-slate-100'
-                          } ${entry.chapter_number === currentChapterNumber ? 'font-bold text-primary bg-primary/5 border-l-2 border-l-primary' : 'border-l-2 border-l-transparent'}`}
-                      >
-                        {entry.title}
-                      </button>
-                    ))}
-                    {toc.length === 0 && (
-                      <div className="px-4 py-3 text-xs text-center opacity-70">Không có dữ liệu</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Right: Theme selection */}
-            <div className="flex items-center justify-end shrink-0">
-              {/* Reading Themes Selection */}
-              <div className="flex items-center space-x-1.5 sm:space-x-2">
-                {(['light', 'sepia', 'green', 'dark'] as ReadingTheme[]).map(t => {
-                  const colors = {
-                    light: 'bg-white border-slate-300',
-                    sepia: 'bg-[#F5EEDC] border-[#DCD3B9]',
-                    green: 'bg-[#E1EDDB] border-[#C3D5B9]',
-                    dark: 'bg-[#1C1D21] border-[#2E3238]',
-                  };
-                  return (
-                    <button
-                      key={t}
-                      onClick={() => setTheme(t)}
-                      className={`w-6 h-6 sm:w-8 sm:h-8 rounded-full border transition-transform hover:scale-110 active:scale-95 ${colors[t]} ${theme === t ? 'scale-110 ring-2 ring-primary ring-offset-2 dark:ring-offset-[#121316]' : 'opacity-80'
-                        }`}
-                      title={`Chủ đề ${t}`}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-
-          </div>
+          {renderControlBar()}
         </div>
 
         {/* Fixed Control Bar — appears when original bar scrolls out of viewport */}
@@ -1234,80 +1216,8 @@ const ChapterPage: React.FC = () => {
             ? 'opacity-100 translate-y-0 pointer-events-auto'
             : 'opacity-0 -translate-y-full pointer-events-none'
         }`}>
-          <div className="flex items-center justify-between gap-4 px-4 py-2.5 sm:px-6 sm:py-3 max-w-[860px] mx-auto">
-
-              {/* Left: Font controls */}
-              <div className="flex items-center justify-start relative shrink-0 gap-2 font-controls-container">
-                <button
-                  onClick={() => setIsFontDropdownOpen(!isFontDropdownOpen)}
-                  className={`flex items-center space-x-1 px-3 py-2 sm:space-x-1.5 sm:px-4.5 sm:py-2.5 rounded-sm transition-all font-bold text-xs ${currentTheme.buttonBg} border ${currentTheme.border} shadow-sm`}
-                  title="Cài đặt phông chữ và kích thước"
-                >
-                  <ViconicIcon name="format_size" size={14} className="shrink-0" />
-                  <span className="hidden sm:inline">Cỡ chữ & Phông</span>
-                  <ViconicIcon name="arrow_drop_down" size={16} className="shrink-0" />
-                </button>
-                {isFontDropdownOpen && (
-                  <div className={`absolute top-full left-0 mt-2 w-64 p-4 ${theme === 'dark' ? 'bg-[#1C1D21] text-[#C5C8CE] border-[#282B30]' : 'bg-white text-slate-800 border-slate-200'} border shadow-xl rounded-md z-50 flex flex-col gap-4 overscroll-contain`}>
-                    <div>
-                      <div className="flex justify-between items-center mb-1.5">
-                        <span className="text-[10px] font-bold uppercase tracking-wider opacity-85">Kích thước chữ</span>
-                        <span className="font-bold text-xs text-primary">{fontSize}px</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] opacity-60">A-</span>
-                        <input type="range" min={14} max={32} step={2} value={fontSize} onChange={(e) => setFontSize(parseInt(e.target.value, 10))} className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" />
-                        <span className="text-xs font-bold opacity-80">A+</span>
-                      </div>
-                    </div>
-                    <div>
-                      <span className="block text-[10px] font-bold uppercase tracking-wider mb-2 opacity-85">Kiểu chữ</span>
-                      <div className="grid grid-cols-3 gap-1">
-                        {(['serif', 'sans', 'mono'] as FontType[]).map(type => (
-                          <button key={type} onClick={() => setFontType(type)} className={`text-[10px] font-bold py-1.5 rounded-sm border uppercase transition-all ${fontType === type ? 'border-primary text-primary bg-primary/10' : 'border-slate-200 dark:border-slate-700 opacity-70 hover:opacity-100 hover:border-slate-300'}`}>
-                            {type === 'serif' ? 'Book' : type === 'sans' ? 'Clean' : 'Code'}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Center: Chapter nav */}
-              <div className="flex justify-center flex-grow max-w-[150px] sm:max-w-[280px] md:max-w-[340px]">
-                <div className="relative w-full toc-dropdown-container">
-                  <button onClick={() => setIsDropdownOpen(!isDropdownOpen)} className={`flex items-center space-x-1 px-3 py-2 sm:space-x-1.5 sm:px-4.5 sm:py-2.5 rounded-sm transition-all font-bold text-xs ${currentTheme.buttonBg} border ${currentTheme.border} shadow-sm w-full justify-between`}>
-                    <div className="flex items-center space-x-1.5 truncate mr-1.5">
-                      <ViconicIcon name="list" size={14} className="shrink-0" />
-                      <span className="truncate select-none hidden sm:inline">{chapterData?.title || `Chương ${currentChapterNumber}`}</span>
-                      <span className="truncate select-none sm:hidden">Chương {currentChapterNumber}</span>
-                    </div>
-                    <ViconicIcon name="arrow_drop_down" size={16} className="shrink-0" />
-                  </button>
-                  {isDropdownOpen && (
-                    <div className={`absolute top-full left-0 w-full mt-2 max-h-[50vh] overflow-y-auto ${theme === 'dark' ? 'bg-[#1C1D21] text-[#C5C8CE] border-[#282B30]' : 'bg-white text-slate-800 border-slate-200'} border shadow-xl rounded-md z-50 flex flex-col overscroll-contain`}>
-                      {toc.map((entry, idx) => (
-                        <button key={idx} onClick={() => { setIsDropdownOpen(false); navigate(`/chapter/${entry.id}`, { state: { storySlug } }); }} className={`text-left px-4 py-2.5 hover:bg-primary/5 transition-colors border-b last:border-b-0 text-xs ${theme === 'dark' ? 'border-[#282B30]' : 'border-slate-100'} ${entry.chapter_number === currentChapterNumber ? 'font-bold text-primary bg-primary/5 border-l-2 border-l-primary' : 'border-l-2 border-l-transparent'}`}>
-                          {entry.title}
-                        </button>
-                      ))}
-                      {toc.length === 0 && (<div className="px-4 py-3 text-xs text-center opacity-70">Không có dữ liệu</div>)}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Right: Theme selection */}
-              <div className="flex items-center justify-end shrink-0">
-                <div className="flex items-center space-x-1.5 sm:space-x-2">
-                  {(['light', 'sepia', 'green', 'dark'] as ReadingTheme[]).map(t => {
-                    const colors = { light: 'bg-white border-slate-300', sepia: 'bg-[#F5EEDC] border-[#DCD3B9]', green: 'bg-[#E1EDDB] border-[#C3D5B9]', dark: 'bg-[#1C1D21] border-[#2E3238]' };
-                    return (<button key={t} onClick={() => setTheme(t)} className={`w-6 h-6 sm:w-8 sm:h-8 rounded-full border transition-transform hover:scale-110 active:scale-95 ${colors[t]} ${theme === t ? 'scale-110 ring-2 ring-primary ring-offset-2 dark:ring-offset-[#121316]' : 'opacity-80'}`} title={`Chủ đề ${t}`} />);
-                  })}
-                </div>
-              </div>
-
+          <div className="px-3 py-2.5 sm:px-6 sm:py-3 max-w-[860px] mx-auto">
+            {renderControlBar(true)}
           </div>
         </div>
 
@@ -1409,6 +1319,18 @@ const ChapterPage: React.FC = () => {
             </div>
           ) : chapterData ? (
             renderChapterContent()
+          ) : loadError ? (
+            <div className="text-center py-16 border border-dashed rounded-md flex flex-col items-center gap-3">
+              <p className="opacity-70 text-sm">
+                Kết nối đang chậm hoặc bạn thao tác quá nhanh. Vui lòng thử lại sau vài giây.
+              </p>
+              <button
+                onClick={() => chapterId && runLoad(chapterId)}
+                className="px-5 py-2 rounded-sm font-bold text-sm bg-primary text-on-primary shadow-sm hover:bg-primary/95 transition-colors"
+              >
+                Thử lại
+              </button>
+            </div>
           ) : (
             <div className="text-center opacity-70 py-16 border border-dashed rounded-md">
               Nội dung chương này chưa được cập nhật.
@@ -1438,7 +1360,7 @@ const ChapterPage: React.FC = () => {
 
           <div className="flex items-center gap-2">
             <Link
-              to={`/detail/${storySlug}`}
+              to={`/detail/${novel?.id ?? storySlug}`}
               className={`flex items-center px-3 py-2.5 sm:px-4 sm:py-2.5 border rounded-sm font-bold text-xs transition-all ${currentTheme.buttonBg} ${currentTheme.border}`}
               title="Quay lại chi tiết truyện"
             >
@@ -1621,7 +1543,7 @@ const ChapterPage: React.FC = () => {
                 className={`flex gap-3 p-4 rounded-sm border transition-all duration-300 ${highlightedCommentId === comment.id ? 'border-primary shadow-md shadow-primary/20 ring-1 ring-primary/40' : currentTheme.border} ${currentTheme.accentBg} hover:bg-opacity-100`}
               >
                 <div className="relative shrink-0">
-                  {isUserVIP(comment.user) ? (
+                  {comment.isVip ? (
                     <div className="w-10 h-10 rounded-sm vip-avatar-rainbow">
                       <img alt={comment.user} className="w-full h-full rounded-sm object-cover bg-white" src={comment.avatar} />
                     </div>
@@ -1636,44 +1558,51 @@ const ChapterPage: React.FC = () => {
                 <div className="flex-grow min-w-0">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 truncate">
-                      <span className={`font-label-bold text-xs truncate ${isUserVIP(comment.user) ? 'text-primary font-black' : ''}`}>
+                      <span className={`font-label-bold text-xs truncate ${comment.isVip ? 'text-primary font-black' : ''}`}>
                         {comment.user}
                       </span>
-                      {isUserVIP(comment.user) && (
+                      {comment.isVip && (
                         <span className="vip-badge-rainbow select-none shrink-0">
                           <span className="vip-badge-rainbow-inner">
                             <span className="vip-text-rainbow text-[7px] font-black uppercase">VIP</span>
                           </span>
                         </span>
                       )}
+                      {comment.isStaff && (
+                        <span className="admin-badge select-none shrink-0">ADMIN</span>
+                      )}
                       <span className="text-[9px] opacity-60 font-bold uppercase tracking-widest shrink-0">{comment.time}</span>
                     </div>
 
-                    {/* Actions Dropdown */}
-                    <div className="relative comment-menu-container">
-                      <button
-                        onClick={() => setActiveCommentMenuId(activeCommentMenuId === comment.id ? null : comment.id)}
-                        className="opacity-60 hover:opacity-100 hover:text-primary transition-colors flex items-center justify-center shrink-0 p-1 rounded-sm"
-                      >
-                        <ViconicIcon name="more_horiz" size={14} className="shrink-0" />
-                      </button>
-                      {activeCommentMenuId === comment.id && (
-                        <div className={`absolute right-0 top-full mt-1.5 w-24 border ${currentTheme.border} shadow-xl ${currentTheme.accentBg} rounded-sm overflow-hidden flex flex-col z-30 animate-in fade-in slide-in-from-top-1 duration-150`}>
-                          <button
-                            onClick={() => handleStartEdit(comment.id, comment.text)}
-                            className="px-3 py-2 text-left text-[11px] font-bold hover:bg-primary/5 transition-colors border-b last:border-b-0 border-current/10"
-                          >
-                            Sửa
-                          </button>
-                          <button
-                            onClick={() => handleDeleteComment(comment.id)}
-                            className="px-3 py-2 text-left text-[11px] font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
-                          >
-                            Xóa
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                    {/* Actions Dropdown — own comment: edit + delete; admin: delete only */}
+                    {(comment.user === currentUser?.name || currentUser?.is_staff) && (
+                      <div className="relative comment-menu-container">
+                        <button
+                          onClick={() => setActiveCommentMenuId(activeCommentMenuId === comment.id ? null : comment.id)}
+                          className="opacity-60 hover:opacity-100 hover:text-primary transition-colors flex items-center justify-center shrink-0 p-1 rounded-sm"
+                        >
+                          <ViconicIcon name="more_horiz" size={14} className="shrink-0" />
+                        </button>
+                        {activeCommentMenuId === comment.id && (
+                          <div className={`absolute right-0 top-full mt-1.5 w-24 border ${currentTheme.border} shadow-xl ${currentTheme.accentBg} rounded-sm overflow-hidden flex flex-col z-30 animate-in fade-in slide-in-from-top-1 duration-150`}>
+                            {comment.user === currentUser?.name && (
+                              <button
+                                onClick={() => handleStartEdit(comment.id, comment.text)}
+                                className="px-3 py-2 text-left text-[11px] font-bold hover:bg-primary/5 transition-colors border-b last:border-b-0 border-current/10"
+                              >
+                                Sửa
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleDeleteComment(comment.id)}
+                              className="px-3 py-2 text-left text-[11px] font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                            >
+                              Xóa
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {editingCommentId === comment.id ? (
@@ -1742,7 +1671,7 @@ const ChapterPage: React.FC = () => {
                     <div className="mt-3.5 space-y-3.5 pl-4 border-l-2 border-dashed border-current/20 animate-in fade-in duration-300">
                       {comment.replies.map((reply) => (
                         <div key={reply.id} className={`flex gap-2.5 p-2.5 rounded-sm border ${currentTheme.border} bg-current/5`}>
-                          {isUserVIP(reply.user) ? (
+                          {reply.isVip ? (
                             <div className="w-8 h-8 rounded-sm vip-avatar-rainbow shrink-0">
                               <img alt={reply.user} className="w-full h-full rounded-sm object-cover bg-white" src={reply.avatar} />
                             </div>
@@ -1750,21 +1679,87 @@ const ChapterPage: React.FC = () => {
                             <img alt={reply.user} className={`w-8 h-8 rounded-sm object-cover border ${currentTheme.border} shrink-0`} src={reply.avatar} />
                           )}
                           <div className="flex-grow min-w-0">
-                            <div className="flex items-center gap-1.5 truncate">
-                              <span className={`font-label-bold text-[11px] truncate ${isUserVIP(reply.user) ? 'text-primary font-black' : ''}`}>{reply.user}</span>
-                               {isUserVIP(reply.user) && (
-                                <span className="vip-badge-rainbow select-none shrink-0">
-                                  <span className="vip-badge-rainbow-inner">
-                                    <span className="vip-text-rainbow text-[7px] font-black uppercase">VIP</span>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 truncate">
+                                <span className={`font-label-bold text-[11px] truncate ${reply.isVip ? 'text-primary font-black' : ''}`}>{reply.user}</span>
+                                 {reply.isVip && (
+                                  <span className="vip-badge-rainbow select-none shrink-0">
+                                    <span className="vip-badge-rainbow-inner">
+                                      <span className="vip-text-rainbow text-[7px] font-black uppercase">VIP</span>
+                                    </span>
                                   </span>
-                                </span>
+                                )}
+                                {reply.isStaff && (
+                                  <span className="admin-badge select-none shrink-0">ADMIN</span>
+                                )}
+                                <span className="text-[8px] opacity-60 font-bold uppercase tracking-widest shrink-0">{reply.time}</span>
+                              </div>
+
+                              {(reply.user === currentUser?.name || currentUser?.is_staff) && (
+                                <div className="relative comment-menu-container">
+                                  <button
+                                    onClick={() => setActiveCommentMenuId(activeCommentMenuId === reply.id ? null : reply.id)}
+                                    className="opacity-60 hover:opacity-100 hover:text-primary transition-colors flex items-center justify-center shrink-0 p-1 rounded-sm"
+                                  >
+                                    <ViconicIcon name="more_horiz" size={13} className="shrink-0" />
+                                  </button>
+                                  {activeCommentMenuId === reply.id && (
+                                    <div className={`absolute right-0 top-full mt-1.5 w-24 border ${currentTheme.border} shadow-xl ${currentTheme.accentBg} rounded-sm overflow-hidden flex flex-col z-30 animate-in fade-in slide-in-from-top-1 duration-150`}>
+                                      {reply.user === currentUser?.name && (
+                                        <button
+                                          onClick={() => handleStartEdit(reply.id, reply.text)}
+                                          className="px-3 py-2 text-left text-[11px] font-bold hover:bg-primary/5 transition-colors border-b last:border-b-0 border-current/10"
+                                        >
+                                          Sửa
+                                        </button>
+                                      )}
+                                      <button
+                                        onClick={() => handleDeleteComment(reply.id, comment.id)}
+                                        className="px-3 py-2 text-left text-[11px] font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                                      >
+                                        Xóa
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
                               )}
-                              <span className="text-[8px] opacity-60 font-bold uppercase tracking-widest shrink-0">{reply.time}</span>
                             </div>
-                            <p
-                              className="font-body-ui text-[11.5px] mt-1 leading-relaxed text-justify break-words"
-                              dangerouslySetInnerHTML={{ __html: renderCommentContentHtml(reply.text) }}
-                            />
+
+                            {editingCommentId === reply.id ? (
+                              <div className="flex flex-col gap-2 mt-1.5">
+                                <div
+                                  contentEditable={true}
+                                  ref={(el) => {
+                                    if (el && !el.dataset.initialized) {
+                                      el.innerHTML = editingCommentText;
+                                      el.dataset.initialized = 'true';
+                                    }
+                                  }}
+                                  onInput={(e) => setEditingCommentText(e.currentTarget.innerHTML)}
+                                  className={`w-full ${currentTheme.bg} border ${currentTheme.border} focus:border-primary focus:ring-0 rounded-sm p-2 font-body-ui text-[11px] min-h-[50px] outline-none shadow-inner`}
+                                  dir="ltr"
+                                />
+                                <div className="flex gap-2 justify-end">
+                                  <button
+                                    onClick={() => setEditingCommentId(null)}
+                                    className="px-3 py-1.5 border border-dashed rounded-sm text-[10px] font-bold opacity-75 hover:opacity-100 transition-colors"
+                                  >
+                                    Hủy
+                                  </button>
+                                  <button
+                                    onClick={() => handleSaveEdit(reply.id, comment.id)}
+                                    className="px-3 py-1.5 bg-primary text-on-primary rounded-sm text-[10px] font-bold hover:bg-primary/95 transition-all shadow-sm active:scale-95"
+                                  >
+                                    Lưu
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <p
+                                className="font-body-ui text-[11.5px] mt-1 leading-relaxed text-justify break-words"
+                                dangerouslySetInnerHTML={{ __html: renderCommentContentHtml(reply.text) }}
+                              />
+                            )}
                           </div>
                         </div>
                       ))}
@@ -1967,104 +1962,6 @@ const ChapterPage: React.FC = () => {
         </button>
       )}
 
-      {/* Hidden Audio Element */}
-      <audio
-        ref={audioRef}
-        onEnded={handleAudioEnded}
-        style={{ display: 'none' }}
-      />
-
-      {/* Floating Audio Player - Per-sentence streaming */}
-      {/* Floating Audio Player - Per-paragraph streaming */}
-      {paragraphs.length > 0 && (
-        <div className={`fixed bottom-0 left-0 right-0 z-50 border-t ${currentTheme.border} ${currentTheme.accentBg} shadow-2xl animate-in slide-in-from-bottom duration-300`}>
-          <div className="flex items-center justify-between gap-2 sm:gap-3 px-3 py-2 sm:px-4 sm:py-2.5 max-w-[860px] mx-auto">
-            {/* Left: Info */}
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              <div className="p-1.5 bg-primary/10 text-primary rounded-sm flex items-center justify-center shrink-0">
-                {isTtsLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <ViconicIcon name="settings_voice" size={16} />
-                )}
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] sm:text-xs font-bold truncate">
-                  {ttsError ? (
-                    <span className="text-destructive">{ttsError}</span>
-                  ) : isModelLoading ? (
-                    <span className="animate-pulse text-primary">Đang tải mô hình...</span>
-                  ) : isTtsLoading ? (
-                    <span className="animate-pulse text-primary">Đang chuyển đổi...</span>
-                  ) : currentParagraphIndex >= 0 ? (
-                    <span className="truncate">
-                      Đoạn {currentParagraphIndex + 1}/{paragraphs.length}
-                    </span>
-                  ) : (
-                    <span className="opacity-70 truncate hidden sm:inline">Chọn đoạn hoặc nhấn Phát để nghe</span>
-                  )}
-                </p>
-              </div>
-            </div>
-
-            {/* Center: Controls */}
-            <div className="flex items-center gap-2 sm:gap-3">
-              {/* Skip Previous Button */}
-              <button
-                onClick={() => {
-                  if (prevEntry) { localStorage.setItem('tts-autoplay', 'true'); navigate(`/chapter/${prevEntry.id}`, { state: { storySlug } }); }
-                }}
-                disabled={!prevEntry}
-                className="p-1.5 rounded-full hover:bg-current/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-primary flex items-center justify-center"
-                title="Chương trước"
-              >
-                <SkipBack className="w-5 h-5" />
-              </button>
-
-              {/* Play/Pause Toggle Button */}
-              <button
-                onClick={isTtsPlaying ? pauseTts : resumeTts}
-                className="p-2 sm:p-2.5 bg-primary text-on-primary rounded-full hover:bg-primary/95 transition-all shadow-md active:scale-95 flex items-center justify-center"
-                title={isTtsPlaying ? "Tạm dừng" : "Phát"}
-              >
-                {isTtsPlaying ? (
-                  <Pause className="w-5 h-5 fill-current" />
-                ) : (
-                  <Play className="w-5 h-5 fill-current" />
-                )}
-              </button>
-
-              {/* Skip Next Button */}
-              <button
-                onClick={() => {
-                  if (nextEntry) { localStorage.setItem('tts-autoplay', 'true'); navigate(`/chapter/${nextEntry.id}`, { state: { storySlug } }); }
-                }}
-                disabled={!nextEntry}
-                className="p-1.5 rounded-full hover:bg-current/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-primary flex items-center justify-center"
-                title="Chương sau"
-              >
-                <SkipForward className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Right: Speed control */}
-            <div className="flex items-center gap-2 max-w-[120px] sm:max-w-[160px] flex-1 justify-end">
-              <span className="text-[10px] sm:text-xs font-bold whitespace-nowrap opacity-80 min-w-[32px] text-right">
-                {ttsSpeed.toFixed(1)}x
-              </span>
-              <input
-                type="range"
-                min="1.0"
-                max="2.0"
-                step="0.1"
-                value={ttsSpeed}
-                onChange={(e) => setTtsSpeed(parseFloat(e.target.value))}
-                className="w-16 sm:w-24 h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary shrink-0"
-              />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

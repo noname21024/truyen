@@ -2,14 +2,19 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import UpdateCard from '@/components/cards/UpdateCard';
 import ViconicIcon from '@/components/ui/ViconicIcon';
+import SimplePagination from '@/components/ui/SimplePagination';
 import { CategoryService, NovelService } from '@/lib/api';
 
 type SortOption = 'newest' | 'chapters' | 'views' | 'words';
 
+const PAGE_SIZE = 12;
+
 const GenrePage: React.FC = () => {
   const { genreId } = useParams<{ genreId: string }>();
-  
+  const genreIdIsNumeric = !!genreId && /^\d+$/.test(genreId);
+
   const [genres, setGenres] = useState<string[]>([]);
+  const [categoriesData, setCategoriesData] = useState<{ id: number; name: string }[]>([]);
   const [loadingGenres, setLoadingGenres] = useState(true);
   const [novels, setNovels] = useState<any[]>([]);
   const [loadingNovels, setLoadingNovels] = useState(true);
@@ -20,6 +25,7 @@ const GenrePage: React.FC = () => {
     CategoryService.getCategories()
       .then(data => {
         if (data && data.length > 0) {
+          setCategoriesData(data);
           setGenres(data.map(c => c.name).sort((a, b) => a.localeCompare(b)));
         }
       })
@@ -36,7 +42,7 @@ const GenrePage: React.FC = () => {
       .then(data => {
         if (data) {
           const mapped = data.map(dbNovel => ({
-            id: dbNovel.slug,
+            id: dbNovel.id,
             title: dbNovel.title,
             author: dbNovel.author || "Đang cập nhật",
             status: dbNovel.status === 'COMPLETED' ? 'Hoàn thành' : 'Đang ra',
@@ -58,10 +64,15 @@ const GenrePage: React.FC = () => {
       });
   }, []);
 
-  // Selected genres (start with the one from URL)
-  const [selectedGenres, setSelectedGenres] = useState<string[]>(genreId ? [genreId] : []);
+  // Selected genres (start with the one from URL — only if it's a legacy name-based link;
+  // numeric id-based links resolve to a name once categories load, see effect below)
+  const [selectedGenres, setSelectedGenres] = useState<string[]>(genreId && !genreIdIsNumeric ? [genreId] : []);
   const [sortBy, setSortBy] = useState<SortOption>('newest');
   const [showAllGenres, setShowAllGenres] = useState(false);
+  const [page, setPage] = useState(1);
+
+  // Reset to page 1 whenever filters/sort change
+  useEffect(() => { setPage(1); }, [selectedGenres, sortBy]);
 
   // Auto-expand showAllGenres if any selected genre is not in the first 24
   useEffect(() => {
@@ -76,12 +87,19 @@ const GenrePage: React.FC = () => {
 
   const displayedGenres = showAllGenres ? genres : genres.slice(0, 24);
 
-  // Sync URL genre on param change
+  // Sync URL genre on param change — supports both numeric id (new short links) and raw name (legacy links)
   useEffect(() => {
-    if (genreId && !selectedGenres.includes(genreId)) {
+    if (!genreId) return;
+    if (genreIdIsNumeric) {
+      if (categoriesData.length === 0) return; // wait for categories to load before resolving
+      const found = categoriesData.find(c => String(c.id) === genreId);
+      if (found && !selectedGenres.includes(found.name)) {
+        setSelectedGenres([found.name]);
+      }
+    } else if (!selectedGenres.includes(genreId)) {
       setSelectedGenres([genreId]);
     }
-  }, [genreId]);
+  }, [genreId, genreIdIsNumeric, categoriesData]);
 
   const toggleGenre = (genre: string) => {
     setSelectedGenres(prev => 
@@ -120,7 +138,7 @@ const GenrePage: React.FC = () => {
   }, [novels, selectedGenres, sortBy]);
 
   return (
-    <div className="max-w-[1300px] mx-auto px-8 py-10 w-full min-h-screen">
+    <div className="max-w-[1300px] mx-auto px-4 sm:px-6 md:px-8 py-10 w-full min-h-screen">
       <div className="mb-8 border-b border-outline-variant/50 pb-4">
         <h1 className="font-display-lg text-xl sm:text-2xl md:text-3xl text-on-surface mb-2 flex items-center gap-2 truncate">
           <ViconicIcon name="f16:tag-multiple-20-filled" size={32} className="text-primary shrink-0" />
@@ -225,20 +243,28 @@ const GenrePage: React.FC = () => {
           ))}
         </div>
       ) : filteredNovels.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredNovels.map((novel) => (
-            <UpdateCard 
-              key={novel.id}
-              id={novel.id}
-              title={novel.title} 
-              chapter={`Chương ${novel.chapter_count || 1}`} 
-              time="Mới cập nhật" 
-              image={novel.cover}
-              tags={novel.tags}
-              views={novel.views}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {filteredNovels.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((novel) => (
+              <UpdateCard
+                key={novel.id}
+                id={novel.id}
+                title={novel.title}
+                chapter={`Chương ${novel.chapter_count || 1}`}
+                time="Mới cập nhật"
+                image={novel.cover}
+                tags={novel.tags}
+                views={novel.views}
+              />
+            ))}
+          </div>
+          <SimplePagination
+            currentPage={page}
+            totalPages={Math.max(1, Math.ceil(filteredNovels.length / PAGE_SIZE))}
+            onPageChange={(p) => { setPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+            className="mt-8"
+          />
+        </>
       ) : (
         <div className="text-center py-20 bg-surface border border-outline-variant/50 rounded-sm">
           <ViconicIcon name="search_off" size={40} className="text-outline-variant mb-4 block mx-auto shrink-0" />

@@ -4,6 +4,8 @@ import Header from './Header';
 import Footer from './Footer';
 import ViconicIcon from '@/components/ui/ViconicIcon';
 import { NovelService } from '@/lib/api';
+import { useAudioPlayer } from '@/contexts/AudioPlayerContext';
+import GlobalAudioPlayer from '@/components/reader/GlobalAudioPlayer';
 
 interface MainLayoutProps {
   children: React.ReactNode;
@@ -12,8 +14,87 @@ interface MainLayoutProps {
 const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   const location = useLocation();
   const isChapterPage = location.pathname.startsWith('/chapter/');
+  const { track } = useAudioPlayer();
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const [isAdminUser, setIsAdminUser] = useState(false);
+
+  useEffect(() => {
+    const checkAdmin = () => {
+      try {
+        const userStr = localStorage.getItem('user');
+        if (userStr) {
+          const user = JSON.parse(userStr);
+          setIsAdminUser(!!user?.is_staff);
+          return;
+        }
+      } catch {}
+      setIsAdminUser(false);
+    };
+
+    checkAdmin();
+    const interval = setInterval(checkAdmin, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // DevTools and Copy protection for non-admin users
+  useEffect(() => {
+    if (isAdminUser) return;
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F12') {
+        e.preventDefault();
+        return false;
+      }
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      if (isCtrlOrCmd) {
+        const key = e.key.toLowerCase();
+        if (
+          (e.shiftKey && (key === 'i' || key === 'j' || key === 'c')) ||
+          key === 'u' ||
+          key === 's' ||
+          key === 'p' ||
+          key === 'a' ||
+          key === 'c'
+        ) {
+          e.preventDefault();
+          return false;
+        }
+      }
+    };
+
+    const handleCopy = (e: ClipboardEvent) => {
+      e.preventDefault();
+      e.clipboardData?.setData('text/plain', 'Bản quyền thuộc về Pub Nih Truyện. Vui lòng không sao chép dưới mọi hình thức.');
+    };
+
+    const handleDragStart = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    const blockDevTools = () => {
+      debugger;
+    };
+    const devToolsInterval = setInterval(blockDevTools, 200);
+
+    document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('copy', handleCopy);
+    document.addEventListener('dragstart', handleDragStart);
+
+    return () => {
+      clearInterval(devToolsInterval);
+      document.removeEventListener('contextmenu', handleContextMenu);
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('copy', handleCopy);
+      document.removeEventListener('dragstart', handleDragStart);
+    };
+  }, [isAdminUser]);
 
   const [dialog, setDialog] = useState<{
     isOpen: boolean;
@@ -78,14 +159,16 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   const [coords, setCoords] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
-    // Load all novels to cache details
+    let cancelled = false;
     NovelService.getNovels()
       .then(data => {
+        if (cancelled) return;
         if (data) setAllNovels(data);
       })
       .catch(err => {
-        console.warn("Failed to load novels for hover preview:", err);
+        if (!cancelled) console.warn("Failed to load novels for hover preview:", err);
       });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -103,7 +186,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       if (card) {
         const slug = card.getAttribute('data-novel-slug');
         if (slug) {
-          const found = allNovels.find(n => n.slug === slug);
+          const found = allNovels.find(n => n.slug === slug || String(n.id) === slug);
           if (found) {
             setHoveredNovel(found);
           }
@@ -170,17 +253,20 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   }
 
   return (
-    <div className="bg-surface text-on-surface font-body-ui text-body-ui min-h-screen flex flex-col relative overflow-x-hidden">
+    <div className={`bg-surface text-on-surface font-body-ui text-body-ui min-h-screen flex flex-col relative overflow-x-hidden ${!isAdminUser ? 'select-none [&_*]:select-none' : ''}`}>
       {/* Ambient Sakura Background Elements */}
       <div className="fixed inset-0 pointer-events-none z-[-1] bg-[radial-gradient(circle_at_50%_50%,rgba(255,209,220,0.1)_0%,transparent_80%)]"></div>
       
       <Header />
-      
-      <main className="flex-grow">
+
+      <main className={`flex-grow ${track ? 'pb-16' : ''}`}>
         {children}
       </main>
-      
+
       <Footer />
+
+      {/* Global persistent audio mini-player — survives route changes across the whole app */}
+      <GlobalAudioPlayer />
 
       {/* Global Back to Top button (only on non-chapter pages since ChapterPage has its own themed button) */}
       {!isChapterPage && showBackToTop && (

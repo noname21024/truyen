@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import ViconicIcon from '@/components/ui/ViconicIcon';
 import { NovelService } from '@/lib/api';
+import { formatViews } from '@/lib/format';
 
-type RankFilter = 'all' | 'month' | 'week' | 'day';
+const TOP_N = 30;
 
 interface RankedNovel {
   id: string;
@@ -14,7 +15,6 @@ interface RankedNovel {
   genres: string[];
   description: string;
   viewCount: number;
-  displayViews: number;
   status?: string;
   totalChapters: number;
   is_vip?: boolean;
@@ -23,94 +23,43 @@ interface RankedNovel {
 const RankingPage: React.FC = () => {
   const [novels, setNovels] = useState<RankedNovel[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<RankFilter>('all');
 
   useEffect(() => {
     setLoading(true);
     NovelService.getNovels()
       .then(data => {
-        const mapped = data.map((novel: any) => {
-          // Calculate scale factors based on character codes of title to make orderings shift realistically
-          const titleCode1 = novel.title.charCodeAt(0) || 0;
-          const titleCode2 = novel.title.charCodeAt(1) || 0;
-          const titleCode3 = novel.title.charCodeAt(2) || 0;
+        const mapped = data.map((novel: any) => ({
+          id: novel.id,
+          slug: novel.slug,
+          title: novel.title,
+          author: novel.author || "Đang cập nhật",
+          cover_url: novel.cover_url,
+          genres: novel.genres.map((g: any) => g.name),
+          description: novel.description
+            ? (() => {
+                const cleanDesc = novel.description.replace(/\\n/g, '\n').replace(/\r/g, '');
+                return cleanDesc.includes('\n')
+                  ? cleanDesc.split('\n')[0].trim().replace(/\.+\s*$/, '') + '...'
+                  : cleanDesc;
+              })()
+            : "Chưa có tóm tắt nội dung.",
+          viewCount: novel.view_count || 0,
+          status: novel.status,
+          totalChapters: novel.total_chapters || 0,
+          is_vip: novel.is_vip
+        }));
 
-          const dayFactor = 0.01 + (titleCode1 % 5) * 0.004; // 1.0% to 2.6%
-          const weekFactor = 0.07 + (titleCode2 % 5) * 0.018; // 7.0% to 14.2%
-          const monthFactor = 0.35 + (titleCode3 % 5) * 0.055; // 35.0% to 57.0%
+        // Sort by real total view count descending — this is the actual ranking
+        mapped.sort((a, b) => b.viewCount - a.viewCount);
 
-          return {
-            id: novel.slug,
-            slug: novel.slug,
-            title: novel.title,
-            author: novel.author || "Đang cập nhật",
-            cover_url: novel.cover_url,
-            genres: novel.genres.map((g: any) => g.name),
-            description: novel.description 
-              ? (() => {
-                  const cleanDesc = novel.description.replace(/\\n/g, '\n').replace(/\r/g, '');
-                  return cleanDesc.includes('\n')
-                    ? cleanDesc.split('\n')[0].trim().replace(/\.+\s*$/, '') + '...'
-                    : cleanDesc;
-                })()
-              : "Chưa có tóm tắt nội dung.",
-            viewCount: novel.view_count || 0,
-            status: novel.status,
-            totalChapters: novel.total_chapters || 0,
-            factors: { dayFactor, weekFactor, monthFactor },
-            is_vip: novel.is_vip
-          };
-        });
-
-        // Compute display view counts based on current filter
-        const computed = mapped.map(n => {
-          let displayViews = n.viewCount;
-          if (filter === 'day') {
-            displayViews = Math.floor(n.viewCount * n.factors.dayFactor);
-          } else if (filter === 'week') {
-            displayViews = Math.floor(n.viewCount * n.factors.weekFactor);
-          } else if (filter === 'month') {
-            displayViews = Math.floor(n.viewCount * n.factors.monthFactor);
-          }
-
-          return {
-            id: n.id,
-            slug: n.slug,
-            title: n.title,
-            author: n.author,
-            cover_url: n.cover_url,
-            genres: n.genres,
-            description: n.description,
-            viewCount: n.viewCount,
-            displayViews,
-            status: n.status,
-            totalChapters: n.totalChapters,
-            is_vip: n.is_vip
-          };
-        });
-
-        // Sort by computed display views descending
-        computed.sort((a, b) => b.displayViews - a.displayViews);
-        
-        setNovels(computed);
+        setNovels(mapped.slice(0, TOP_N));
         setLoading(false);
       })
       .catch(err => {
         console.error("Failed to load ranking from API", err);
         setLoading(false);
       });
-  }, [filter]);
-
-  // Helper to format view numbers
-  const formatViews = (val: number): string => {
-    if (val >= 1000000) {
-      return (val / 1000000).toFixed(1) + 'M';
-    }
-    if (val >= 1000) {
-      return (val / 1000).toFixed(1) + 'k';
-    }
-    return val.toString();
-  };
+  }, []);
 
   return (
     <div className="max-w-[1300px] mx-auto px-6 md:px-12 pt-6 pb-16 w-full min-h-screen">
@@ -139,35 +88,9 @@ const RankingPage: React.FC = () => {
             <span>Bảng Xếp Hạng Truyện</span>
           </h1>
           <p className="font-body-ui text-on-surface-variant text-xs sm:text-sm max-w-2xl opacity-90 leading-relaxed">
-            Khám phá những tác phẩm ăn khách, được đón đọc nhiều nhất trên Pub Nih Truyện. Cập nhật liên tục dựa trên số lượt xem thực tế theo ngày, tuần, tháng.
+            Khám phá những tác phẩm ăn khách, được đón đọc nhiều nhất trên Pub Nih Truyện, xếp hạng theo tổng lượt xem thực tế.
           </p>
         </div>
-      </div>
-
-      {/* Filter Segmented Control */}
-      <div className="flex bg-surface-variant/40 border border-outline-variant/30 rounded-xl p-1 mb-8 max-w-md font-label-bold text-xs select-none">
-        {(['all', 'month', 'week', 'day'] as RankFilter[]).map((f) => {
-          const labels = {
-            all: 'Tất cả',
-            month: 'Tháng',
-            week: 'Tuần',
-            day: 'Ngày'
-          };
-          const active = filter === f;
-          return (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`flex-1 text-center py-2 px-3 rounded-lg transition-colors font-bold ${
-                active
-                  ? 'bg-primary text-on-primary shadow-xs'
-                  : 'text-on-surface-variant hover:text-primary hover:bg-primary/5'
-              }`}
-            >
-              {labels[f]}
-            </button>
-          );
-        })}
       </div>
 
       {/* Ranking List */}
@@ -190,7 +113,7 @@ const RankingPage: React.FC = () => {
         <div className="space-y-4">
           {novels.map((novel, index) => {
             const rank = index + 1;
-            
+
             // Design specific colors and labels for rank numbers (no transforms)
             let rankElement = null;
             let cardBorder = "border-slate-100 hover:border-primary/30 dark:border-slate-800/40 dark:hover:border-primary/40";
@@ -254,7 +177,7 @@ const RankingPage: React.FC = () => {
 
                 {/* Cover Art with transition-opacity and transition-colors (no scale or translate transforms) */}
                 <Link 
-                  to={`/detail/${novel.slug}`} 
+                  to={`/detail/${novel.id}`} 
                   className="w-14 sm:w-[72px] aspect-[2/3] shrink-0 overflow-hidden rounded-xl border border-slate-200/60 dark:border-slate-800/60 shadow-sm relative transition-all duration-300 bg-slate-50 dark:bg-slate-900"
                 >
                   <img 
@@ -270,7 +193,7 @@ const RankingPage: React.FC = () => {
                 {/* Details */}
                 <div className="flex-grow min-w-0 pr-1 sm:pr-2">
                   <h3 className="font-display-lg text-xs sm:text-base font-bold text-on-surface line-clamp-1 group-hover:text-primary transition-colors duration-300 mb-1 sm:mb-1.5">
-                    <Link to={`/detail/${novel.slug}`}>{novel.title}</Link>
+                    <Link to={`/detail/${novel.id}`}>{novel.title}</Link>
                   </h3>
                   
                   {/* Author, Chapter Count, Status, and Genres */}
@@ -328,7 +251,7 @@ const RankingPage: React.FC = () => {
                 <div className="shrink-0 text-center pl-1 sm:pl-4 min-w-[65px] sm:min-w-[100px] select-none">
                   <div className="flex items-center gap-1 sm:gap-1.5 bg-primary/5 text-primary border border-primary/8 px-1.5 py-0.5 sm:px-3.5 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-extrabold justify-center w-fit mx-auto">
                     <ViconicIcon name="visibility" size={13} className="text-primary shrink-0" />
-                    <span>{formatViews(novel.displayViews)}</span>
+                    <span>{formatViews(novel.viewCount)}</span>
                   </div>
                   <span className="text-[9px] text-outline uppercase tracking-wider font-bold mt-1.5 hidden sm:block opacity-70">
                     Lượt xem

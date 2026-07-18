@@ -33,7 +33,8 @@ export const showCustomConfirm = (
   message: string,
   onConfirm: () => void,
   onCancel?: () => void,
-  icon?: string
+  icon?: string,
+  options?: { confirmText?: string; cancelText?: string }
 ) => {
   window.dispatchEvent(
     new CustomEvent('show-custom-dialog', {
@@ -41,8 +42,8 @@ export const showCustomConfirm = (
         type: 'confirm',
         title,
         message,
-        confirmText: 'Xác nhận',
-        cancelText: 'Hủy',
+        confirmText: options?.confirmText || 'Xác nhận',
+        cancelText: options?.cancelText || 'Hủy',
         onConfirm,
         onCancel,
         icon,

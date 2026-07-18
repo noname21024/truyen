@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ChapterItem from '@/components/cards/ChapterItem';
 import { useParams, Link } from 'react-router-dom';
 import novelsDataJson from '@/data/novelsIndex.json';
 const novelsData = novelsDataJson as any[];
 import { getNovelViews } from '@/lib/viewCountService';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { NovelService, ChapterService, CoinService, CommentService, type StoryPriceInfo, type ChapterCommentData } from '@/lib/api';
+import { NovelService, ChapterService, CoinService, CommentService, DonationService, StoryFollowService, StoryRatingService, type StoryPriceInfo, type ChapterCommentData, type DonationLeaderboardEntry } from '@/lib/api';
 import DonateModal from '@/components/DonateModal';
 import { isUserVIP } from '@/lib/user';
 import { STICKER_SETS } from '@/data/stickers';
@@ -17,6 +17,8 @@ interface Reply {
   time: string;
   text: string;
   avatar: string;
+  isVip?: boolean;
+  isStaff?: boolean;
 }
 
 interface Comment {
@@ -27,6 +29,8 @@ interface Comment {
   likes: number;
   avatar: string;
   likedByUser?: boolean;
+  isVip?: boolean;
+  isStaff?: boolean;
   replies?: Reply[];
 }
 
@@ -41,6 +45,8 @@ const renderCommentContentHtml = (text: string): string => {
     return match;
   });
 };
+
+const CONTRIBUTORS_PAGE_SIZE = 20;
 
 const DetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -61,10 +67,13 @@ const DetailPage: React.FC = () => {
   const [commentTab, setCommentTab] = useState<'story' | 'chapter'>('story');
   const [chapterComments, setChapterComments] = useState<ChapterCommentData[]>([]);
   const [chapterCommentsLoaded, setChapterCommentsLoaded] = useState(false);
+  const [activeCommentMenuId, setActiveCommentMenuId] = useState<number | null>(null);
+  const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
+  const [editingCommentText, setEditingCommentText] = useState('');
 
   const [ratingData, setRatingData] = useState({
-    count: 1240,
-    sum: 1240 * 4.8,
+    avg: 0,
+    count: 0,
     userRating: 0
   });
   const [hoverRating, setHoverRating] = useState(0);
@@ -84,7 +93,6 @@ const DetailPage: React.FC = () => {
   const [chaptersTotalCount, setChaptersTotalCount] = useState(0);
   const chapterFetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [lastReadChapter, setLastReadChapter] = useState<string | null>(null);
-
   useEffect(() => {
     if (novel?.slug) {
       const prog = localStorage.getItem(`reading_progress_${novel.slug}`);
@@ -93,7 +101,9 @@ const DetailPage: React.FC = () => {
   }, [novel?.slug]);
 
   const processedChapters = React.useMemo(() => {
-    if (chapters.length === 0 && novel?.chapter_count && !chaptersLoadingMore) {
+    // Only fall back to a synthetic full chapter list when there's no active search —
+    // an empty result while searching means "no matches", not "data hasn't loaded yet".
+    if (chapters.length === 0 && novel?.chapter_count && !chaptersLoadingMore && !chapterSearchQuery.trim()) {
       return Array.from({ length: novel.chapter_count }).map((_, idx) => ({
         id: idx + 1,
         chapter_number: idx + 1,
@@ -102,7 +112,7 @@ const DetailPage: React.FC = () => {
       }));
     }
     return chapters;
-  }, [chapters, novel?.chapter_count, novel?.update_time, chaptersLoadingMore]);
+  }, [chapters, novel?.chapter_count, novel?.update_time, chaptersLoadingMore, chapterSearchQuery]);
 
   // Load balance for purchasing locked chapters
   useEffect(() => {
@@ -136,6 +146,11 @@ const DetailPage: React.FC = () => {
   const [historyNovels, setHistoryNovels] = useState<any[]>([]);
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [hotRanking, setHotRanking] = useState<any[]>([]);
+  const [contributors, setContributors] = useState<DonationLeaderboardEntry[]>([]);
+  const [contributorsCount, setContributorsCount] = useState(0);
+  const [contributorsPage, setContributorsPage] = useState(1);
+  const [contributorsLoadingMore, setContributorsLoadingMore] = useState(false);
+  const contributorsSentinelRef = useRef<HTMLDivElement>(null);
   const [replyingToId, setReplyingToId] = useState<number | null>(null);
   const [highlightedCommentId, setHighlightedCommentId] = useState<number | null>(null);
   const [replyText, setReplyText] = useState('');
@@ -144,6 +159,17 @@ const DetailPage: React.FC = () => {
   const [activeStickerSetId, setActiveStickerSetId] = useState('trollface');
   const [showDonateModal, setShowDonateModal] = useState(false);
 
+  // Close comment actions dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (activeCommentMenuId !== null && !target.closest('.comment-menu-container')) {
+        setActiveCommentMenuId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [activeCommentMenuId]);
 
   // Load current user session
   useEffect(() => {
@@ -153,27 +179,40 @@ const DetailPage: React.FC = () => {
     }
   }, []);
 
-  // Load follow status per user
+  // Load follow status per user — read localStorage first for instant UI, then confirm against the real backend
   useEffect(() => {
-    if (id && currentUser) {
-      const followed = localStorage.getItem(`follow_novel_${id}_user_${currentUser.name}`);
-      setIsFollowed(!!followed);
-    } else {
+    if (!currentUser) {
       setIsFollowed(false);
+      return;
     }
-  }, [id, currentUser]);
+    const followedLocal = localStorage.getItem(`follow_novel_${id}_user_${currentUser.name}`);
+    setIsFollowed(!!followedLocal);
+    if (!novel?.slug) return;
+    let cancelled = false;
+    StoryFollowService.checkFollowing(novel.slug)
+      .then(following => {
+        if (cancelled) return;
+        setIsFollowed(following);
+        if (following) localStorage.setItem(`follow_novel_${id}_user_${currentUser.name}`, '1');
+        else localStorage.removeItem(`follow_novel_${id}_user_${currentUser.name}`);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, novel?.slug, currentUser]);
 
   // Load followed novels sorted by update time
   useEffect(() => {
+    let cancelled = false;
     NovelService.getNovels()
       .then(data => {
+        if (cancelled) return;
         if (data && currentUser) {
           const followed = data.filter(dbNovel => {
             const isFollowedById = localStorage.getItem(`follow_novel_${dbNovel.id}_user_${currentUser.name}`) === '1';
             const isFollowedBySlug = localStorage.getItem(`follow_novel_${dbNovel.slug}_user_${currentUser.name}`) === '1';
             return isFollowedById || isFollowedBySlug;
           }).map(dbNovel => ({
-            id: dbNovel.slug,
+            id: dbNovel.id,
             title: dbNovel.title,
             cover: dbNovel.cover_url || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
             author: dbNovel.author || "Đang cập nhật",
@@ -188,7 +227,8 @@ const DetailPage: React.FC = () => {
           setFollowedNovels([]);
         }
       })
-      .catch(e => console.warn("Failed to load followed novels:", e));
+      .catch(e => { if (!cancelled) console.warn("Failed to load followed novels:", e); });
+    return () => { cancelled = true; };
   }, [currentUser, isFollowed]);
 
   // Save viewed novel to viewing history
@@ -196,8 +236,8 @@ const DetailPage: React.FC = () => {
     if (novel) {
       const historyStr = localStorage.getItem('viewing_history') || '[]';
       try {
-        const history = JSON.parse(historyStr) as string[];
-        const updated = [novel.slug, ...history.filter(slug => slug !== novel.slug)].slice(0, 15);
+        const history = JSON.parse(historyStr) as (string | number)[];
+        const updated = [novel.id, ...history.filter(entry => entry !== novel.id)].slice(0, 15);
         localStorage.setItem('viewing_history', JSON.stringify(updated));
       } catch (e) {
         console.error("Failed to update viewing history", e);
@@ -208,15 +248,17 @@ const DetailPage: React.FC = () => {
   // Load viewing history
   useEffect(() => {
     const historyStr = localStorage.getItem('viewing_history') || '[]';
+    let cancelled = false;
     try {
-      const historySlugs = JSON.parse(historyStr) as string[];
-      if (historySlugs.length > 0) {
+      const historyIds = JSON.parse(historyStr) as (string | number)[];
+      if (historyIds.length > 0) {
         NovelService.getNovels()
           .then(data => {
+            if (cancelled) return;
             if (data && Array.isArray(data)) {
-              const matched = data.filter(dbNovel => historySlugs.includes(dbNovel.slug))
+              const matched = data.filter(dbNovel => historyIds.includes(dbNovel.id))
                 .map(dbNovel => ({
-                  id: dbNovel.slug,
+                  id: dbNovel.id,
                   title: dbNovel.title,
                   cover: dbNovel.cover_url || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
                   author: dbNovel.author || "Đang cập nhật",
@@ -225,34 +267,36 @@ const DetailPage: React.FC = () => {
                 }));
 
               // Sort matched novels according to history index (most recent first)
-              matched.sort((a, b) => historySlugs.indexOf(a.id) - historySlugs.indexOf(b.id));
+              matched.sort((a, b) => historyIds.indexOf(a.id) - historyIds.indexOf(b.id));
               setHistoryNovels(matched);
             }
           })
-          .catch(e => console.warn("Failed to load history novels:", e));
+          .catch(e => { if (!cancelled) console.warn("Failed to load history novels:", e); });
       } else {
         setHistoryNovels([]);
       }
     } catch (e) {
       console.warn("Failed to parse viewing history:", e);
     }
+    return () => { cancelled = true; };
   }, [novel]);
 
   // Load hot ranking list matching the RankingPage logic
   useEffect(() => {
+    let cancelled = false;
     NovelService.getNovels()
       .then(data => {
+        if (cancelled) return;
         let mapped: any[] = [];
 
         if (data && Array.isArray(data)) {
           mapped = data.map((novel: any) => ({
-            id: novel.slug,
+            id: novel.id,
             title: novel.title,
             views: novel.view_count || 0,
             cover: novel.cover_url || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
           }));
         } else {
-          // Fallback if data is null/undefined/not an array
           mapped = novelsData.map((novel: any) => ({
             id: novel.id,
             title: novel.title,
@@ -266,6 +310,7 @@ const DetailPage: React.FC = () => {
         setHotRanking(mapped.slice(0, 5));
       })
       .catch(err => {
+        if (cancelled) return;
         console.warn("Failed to load hot ranking from API:", err);
         const fallbackList = novelsData.map((novel: any) => ({
           id: novel.id,
@@ -276,14 +321,56 @@ const DetailPage: React.FC = () => {
         fallbackList.sort((a: any, b: any) => b.views - a.views);
         setHotRanking(fallbackList.slice(0, 5));
       });
+    return () => { cancelled = true; };
   }, []);
+
+  // Load top contributors (donors) for this novel — first batch of 20, lazy-loaded further on scroll
+  useEffect(() => {
+    if (!novel?.slug) return;
+    let cancelled = false;
+    DonationService.getLeaderboard({ story_slug: novel.slug, page: 1, page_size: CONTRIBUTORS_PAGE_SIZE })
+      .then(data => {
+        if (cancelled) return;
+        setContributors(data.results);
+        setContributorsCount(data.count);
+        setContributorsPage(1);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [novel?.slug]);
+
+  const handleLoadMoreContributors = useCallback(() => {
+    if (!novel?.slug || contributorsLoadingMore) return;
+    if (contributors.length >= contributorsCount) return;
+    const nextPage = contributorsPage + 1;
+    setContributorsLoadingMore(true);
+    DonationService.getLeaderboard({ story_slug: novel.slug, page: nextPage, page_size: CONTRIBUTORS_PAGE_SIZE })
+      .then(data => {
+        setContributors(prev => [...prev, ...data.results]);
+        setContributorsCount(data.count);
+        setContributorsPage(nextPage);
+      })
+      .catch(() => {})
+      .finally(() => setContributorsLoadingMore(false));
+  }, [novel?.slug, contributorsPage, contributorsLoadingMore, contributors.length, contributorsCount]);
+
+  // IntersectionObserver: lazy-load the next batch of contributors as the sentinel scrolls into view
+  useEffect(() => {
+    const el = contributorsSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting) handleLoadMoreContributors();
+    }, { threshold: 0.1 });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [handleLoadMoreContributors]);
 
   // Load comments from server
   useEffect(() => {
-    if (!id) return;
-    CommentService.getStoryComments(id)
+    if (!novel?.slug) return;
+    CommentService.getStoryComments(novel.slug)
       .then(data => {
-        const likedKey = `liked_story_comments_${id}`;
+        const likedKey = `liked_story_comments_${novel.slug}`;
         const liked: number[] = JSON.parse(localStorage.getItem(likedKey) || '[]');
         const mapped: Comment[] = data.map(c => ({
           id: c.id,
@@ -293,6 +380,8 @@ const DetailPage: React.FC = () => {
           likes: 0,
           avatar: c.user_avatar || '',
           likedByUser: liked.includes(c.id),
+          isVip: !!c.user_is_vip,
+          isStaff: !!c.user_is_staff,
           replies: [],
         }));
         // Nest replies under parent comments
@@ -320,35 +409,34 @@ const DetailPage: React.FC = () => {
         }, 300);
       })
       .catch(() => setComments([]));
-  }, [id]);
+  }, [novel?.slug]);
 
   // Eagerly load chapter comments so count is shown before tab is clicked
   useEffect(() => {
-    if (!id) return;
-    CommentService.getChapterCommentsByStory(id)
+    if (!novel?.slug) return;
+    CommentService.getChapterCommentsByStory(novel.slug)
       .then(data => { setChapterComments(data); setChapterCommentsLoaded(true); })
       .catch(() => setChapterCommentsLoaded(true));
-  }, [id]);
+  }, [novel?.slug]);
 
-  // Load rating
+  // Load rating aggregate from the story detail response
   useEffect(() => {
-    if (id) {
-      const savedRating = localStorage.getItem(`rating_data_${id}`);
-      if (savedRating) {
-        try {
-          setRatingData(JSON.parse(savedRating));
-        } catch (e) {
-          console.error("Failed to parse rating data", e);
-        }
-      } else {
-        setRatingData({
-          count: 1240,
-          sum: 1240 * 4.8,
-          userRating: 0
-        });
-      }
+    if (!novel) return;
+    setRatingData(prev => ({ ...prev, avg: novel.rating_avg || 0, count: novel.rating_count || 0 }));
+  }, [novel?.rating_avg, novel?.rating_count]);
+
+  // Load the current user's own rating for this story
+  useEffect(() => {
+    if (!novel?.slug || !currentUser) {
+      setRatingData(prev => ({ ...prev, userRating: 0 }));
+      return;
     }
-  }, [id]);
+    let cancelled = false;
+    StoryRatingService.getMyRating(novel.slug)
+      .then(data => { if (!cancelled) setRatingData(prev => ({ ...prev, userRating: data.user_rating || 0 })); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [novel?.slug, currentUser]);
 
   const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -364,6 +452,8 @@ const DetailPage: React.FC = () => {
         likes: 0,
         avatar: created.user_avatar || currentUser.avatar,
         likedByUser: false,
+        isVip: !!created.user_is_vip,
+        isStaff: !!created.user_is_staff,
         replies: [],
       };
       setComments(prev => [newComment, ...prev]);
@@ -391,6 +481,8 @@ const DetailPage: React.FC = () => {
         time: "Vừa xong",
         text: created.content,
         avatar: created.user_avatar || currentUser.avatar,
+        isVip: !!created.user_is_vip,
+        isStaff: !!created.user_is_staff,
       };
       setComments(prev => prev.map(c =>
         c.id === commentId ? { ...c, replies: [...(c.replies || []), newReply] } : c
@@ -454,7 +546,7 @@ const DetailPage: React.FC = () => {
       showToast("Vui lòng đăng nhập tài khoản để thích bình luận!");
       return;
     }
-    const likedKey = `liked_story_comments_${id}`;
+    const likedKey = `liked_story_comments_${novel?.slug}`;
     const liked: number[] = JSON.parse(localStorage.getItem(likedKey) || '[]');
     const isLiked = liked.includes(commentId);
     const updatedLiked = isLiked ? liked.filter(x => x !== commentId) : [...liked, commentId];
@@ -466,28 +558,79 @@ const DetailPage: React.FC = () => {
     ));
   };
 
-  const handleRate = (rating: number) => {
+  const handleDeleteComment = (commentId: number, parentId?: number) => {
+    import('@/lib/dialog').then(({ showCustomConfirm }) => {
+      showCustomConfirm(
+        "Xóa bình luận",
+        "Bạn có chắc chắn muốn xóa bình luận này?",
+        async () => {
+          try {
+            await CommentService.deleteStoryComment(commentId);
+            if (parentId) {
+              setComments(prev => prev.map(c =>
+                c.id === parentId ? { ...c, replies: (c.replies || []).filter(r => r.id !== commentId) } : c
+              ));
+            } else {
+              setComments(prev => prev.filter(c => c.id !== commentId));
+            }
+          } catch {
+            showToast("Xóa bình luận thất bại. Bạn chỉ có thể xóa bình luận của chính mình.");
+          }
+        }
+      );
+    });
+    setActiveCommentMenuId(null);
+  };
+
+  const handleStartEdit = (commentId: number, currentText: string) => {
+    setEditingCommentId(commentId);
+    setEditingCommentText(currentText);
+    setActiveCommentMenuId(null);
+  };
+
+  const handleSaveEdit = async (commentId: number, parentId?: number) => {
+    if (!editingCommentText.trim()) {
+      showToast("Nội dung bình luận không được để trống!");
+      return;
+    }
+    try {
+      const updated = await CommentService.editStoryComment(commentId, editingCommentText);
+      if (parentId) {
+        setComments(prev => prev.map(c =>
+          c.id === parentId ? { ...c, replies: (c.replies || []).map(r => r.id === commentId ? { ...r, text: updated.content } : r) } : c
+        ));
+      } else {
+        setComments(prev => prev.map(c =>
+          c.id === commentId ? { ...c, text: updated.content } : c
+        ));
+      }
+      setEditingCommentId(null);
+      setEditingCommentText('');
+    } catch {
+      showToast("Sửa bình luận thất bại. Bạn chỉ có thể sửa bình luận của chính mình.");
+    }
+  };
+
+  const handleRate = async (rating: number) => {
     if (!currentUser) {
       showToast("Vui lòng đăng nhập tài khoản để đánh giá truyện!");
       return;
     }
-    if (ratingData.userRating > 0) return;
-    const newCount = ratingData.count + 1;
-    const newSum = ratingData.sum + rating;
-    const updated = {
-      count: newCount,
-      sum: newSum,
-      userRating: rating
-    };
-    setRatingData(updated);
-    localStorage.setItem(`rating_data_${id}`, JSON.stringify(updated));
+    if (!novel?.slug) return;
+    try {
+      const result = await StoryRatingService.rate(novel.slug, rating);
+      setRatingData({ avg: result.rating_avg, count: result.rating_count, userRating: result.user_rating });
+    } catch {
+      showToast("Đánh giá thất bại. Vui lòng thử lại!");
+    }
   };
 
-  const handleFollowToggle = () => {
+  const handleFollowToggle = async () => {
     if (!currentUser) {
       showToast("Vui lòng đăng nhập tài khoản để theo dõi truyện!");
       return;
     }
+    if (!novel?.slug) return;
     const nextState = !isFollowed;
     setIsFollowed(nextState);
     if (nextState) {
@@ -497,36 +640,49 @@ const DetailPage: React.FC = () => {
       localStorage.removeItem(`follow_novel_${id}_user_${currentUser.name}`);
       showToast(`Đã hủy theo dõi bộ truyện.`);
     }
+    try {
+      const result = await StoryFollowService.toggle(novel.slug);
+      setNovel((prev: any) => prev ? { ...prev, follow_count: result.follow_count } : prev);
+    } catch {}
   };
 
   useEffect(() => {
     if (id) {
+      let cancelled = false;
       setLoading(true);
       NovelService.getNovelDetail(id)
         .then(data => {
+          if (cancelled) return;
           setViewCount(data.view_count || 0);
-          
+          document.title = `${data.title}${data.author ? ' - ' + data.author : ''} | Pub Nih Truyện`;
+
           setStoryDbId(data.id);
           const mapped = {
-            id: data.slug,
+            id: data.id,
             slug: data.slug,
             title: data.title,
             author: data.author || "Đang cập nhật",
+            author_slug: data.author_slug || null,
+            author_id: data.author_id || null,
             status: data.status === 'COMPLETED' ? 'Hoàn thành' : 'Đang ra',
             cover: data.cover_url || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
             background_thumbnail_url: data.background_thumbnail_url,
             intro: data.description || "Đang cập nhật nội dung tóm tắt.",
-            tags: data.genres.map((g: any) => g.name),
+            tags: data.genres,
             chapter_count: data.total_chapters || 0,
             word_count: 0,
             update_time: data.updated_at,
             is_vip: data.is_vip || false,
+            follow_count: data.follow_count || 0,
+            rating_avg: data.rating_avg || 0,
+            rating_count: data.rating_count || 0,
             toc: (data.toc || []) as { id: number; chapter_number: number; title: string }[],
           };
           setNovel(mapped);
           setLoading(false);
         })
         .catch(err => {
+          if (cancelled) return;
           console.error("Failed to load novel details from backend", err);
           // Try to fallback to static data
           const staticNovel = novelsData.find(n => n.id === id);
@@ -549,8 +705,20 @@ const DetailPage: React.FC = () => {
           }
           setLoading(false);
         });
+      return () => { cancelled = true; };
     }
   }, [id]);
+
+  // free_up_to is a pure function of chapter_count (same formula the backend
+  // uses), so anonymous visitors can get the right lock icons immediately —
+  // no need to wait for a login-gated API call just to know which chapters
+  // are free. This runs for every visitor; the effect below refines
+  // unlockedChapters/storyPrice separately once someone's logged in.
+  useEffect(() => {
+    if (novel?.is_vip && novel?.chapter_count) {
+      setFreeUpTo(Math.max(1, Math.floor(novel.chapter_count * 0.10)));
+    }
+  }, [novel?.is_vip, novel?.chapter_count]);
 
   // Fetch story price info and unlocked chapters when novel is VIP and user is logged in
   useEffect(() => {
@@ -582,6 +750,7 @@ const DetailPage: React.FC = () => {
       setChaptersLoadingMore(true);
       ChapterService.getChaptersPaginated(novel.slug, {
         page: 1,
+        pageSize: 50,
         ordering,
         search: chapterSearchQuery.trim() || undefined,
       })
@@ -602,7 +771,7 @@ const DetailPage: React.FC = () => {
     };
   }, [novel?.slug, chapterSortOrder, chapterSearchQuery]);
 
-  const handleLoadMoreChapters = async () => {
+  const handleLoadMoreChapters = useCallback(async () => {
     if (!novel?.slug || chaptersLoadingMore || !hasMoreChapters) return;
     const nextPage = chaptersPage + 1;
     const ordering = chapterSortOrder === 'asc' ? 'chapter_number' : '-chapter_number';
@@ -610,6 +779,7 @@ const DetailPage: React.FC = () => {
     try {
       const data = await ChapterService.getChaptersPaginated(novel.slug, {
         page: nextPage,
+        pageSize: 50,
         ordering,
         search: chapterSearchQuery.trim() || undefined,
       });
@@ -619,7 +789,20 @@ const DetailPage: React.FC = () => {
       setChaptersPage(nextPage);
     } catch {}
     setChaptersLoadingMore(false);
-  };
+  }, [novel?.slug, chaptersLoadingMore, hasMoreChapters, chaptersPage, chapterSortOrder, chapterSearchQuery]);
+
+  const chaptersSentinelRef = useRef<HTMLDivElement>(null);
+
+  // IntersectionObserver: lazy-load the next batch of chapters as the sentinel scrolls into view
+  useEffect(() => {
+    const el = chaptersSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting) handleLoadMoreChapters();
+    }, { threshold: 0.1 });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [handleLoadMoreChapters]);
 
   const handleLockedChapterClick = (chap: any) => {
     if (!currentUser) {
@@ -868,38 +1051,42 @@ const DetailPage: React.FC = () => {
           </div>
           <p className="font-body-ui text-primary mb-4 flex items-center gap-1 font-bold">
             <ViconicIcon name="edit" size={14} className="shrink-0 text-primary" />
-            {novel.author || "Đang cập nhật"}
+            {(novel.author_id || novel.author_slug) ? (
+              <Link to={`/author/${novel.author_id || novel.author_slug}`} className="hover:underline">
+                {novel.author || "Đang cập nhật"}
+              </Link>
+            ) : (
+              novel.author || "Đang cập nhật"
+            )}
           </p>
           <div className="flex items-center gap-4 mb-6 bg-surface p-2.5 rounded-sm border border-outline-variant/50 w-fit">
             <div className="flex items-center gap-1.5 flex-wrap">
               <div className="flex items-center text-amber-500 gap-0.5 sm:gap-1">
                 {[1, 2, 3, 4, 5].map((star) => {
-                  const avgRating = ratingData.count > 0 ? (ratingData.sum / ratingData.count).toFixed(1) : "0.0";
-                  const isFilled = hoverRating > 0 
-                    ? star <= hoverRating 
-                    : star <= Math.round(parseFloat(avgRating));
-                  
+                  const isFilled = hoverRating > 0
+                    ? star <= hoverRating
+                    : star <= Math.round(ratingData.avg);
+
                   return (
                     <button
                       key={star}
-                      onMouseEnter={() => ratingData.userRating === 0 && setHoverRating(star)}
-                      onMouseLeave={() => ratingData.userRating === 0 && setHoverRating(0)}
+                      onMouseEnter={() => setHoverRating(star)}
+                      onMouseLeave={() => setHoverRating(0)}
                       onClick={() => handleRate(star)}
-                      disabled={ratingData.userRating > 0}
-                      className={`transition-all duration-150 ${ratingData.userRating === 0 ? 'hover:scale-125 cursor-pointer' : 'cursor-default'}`}
-                      title={ratingData.userRating > 0 ? `Bạn đã đánh giá ${ratingData.userRating} sao` : `Đánh giá ${star} sao`}
+                      className="transition-all duration-150 hover:scale-125 cursor-pointer"
+                      title={ratingData.userRating > 0 ? `Bạn đã đánh giá ${ratingData.userRating} sao — bấm để đổi` : `Đánh giá ${star} sao`}
                     >
-                      <ViconicIcon 
-                        name="star" 
-                        size="16px" 
-                        className={`shrink-0 ${isFilled ? 'text-amber-500' : 'text-slate-300'}`} 
+                      <ViconicIcon
+                        name="star"
+                        size="16px"
+                        className={`shrink-0 ${isFilled ? 'text-amber-500' : 'text-slate-300'}`}
                       />
                     </button>
                   );
                 })}
               </div>
               <span className="ml-1 font-bold text-on-surface text-xs sm:text-sm">
-                {(ratingData.count > 0 ? (ratingData.sum / ratingData.count) : 0).toFixed(1)}
+                {ratingData.avg.toFixed(1)}
               </span>
               <span className="text-on-surface-variant text-[10px] sm:text-xs ml-0.5">
                 ({ratingData.count.toLocaleString('vi-VN')})
@@ -913,18 +1100,23 @@ const DetailPage: React.FC = () => {
             <div className="h-4 w-px bg-outline-variant" />
             <span className="font-bold text-xs text-on-surface-variant flex items-center gap-1">
               <ViconicIcon name="visibility" size={14} className="text-primary shrink-0" />
-              {viewCount} lượt xem
+              {viewCount.toLocaleString('vi-VN')} lượt xem
+            </span>
+            <div className="h-4 w-px bg-outline-variant" />
+            <span className="font-bold text-xs text-on-surface-variant flex items-center gap-1">
+              <ViconicIcon name="favorite" size={14} className="text-primary shrink-0" />
+              {(novel.follow_count || 0).toLocaleString('vi-VN')} theo dõi
             </span>
           </div>
           {/* Genres */}
           <div className="flex flex-wrap gap-2 mb-8">
-            {(novel.tags && novel.tags.length > 0 ? novel.tags : ["Chưa phân loại"]).map((genre: string) => (
-              <Link 
-                to={`/genres/${encodeURIComponent(genre)}`}
-                key={genre} 
+            {(novel.tags && novel.tags.length > 0 ? novel.tags : [{ id: null, name: "Chưa phân loại" }]).map((genre: any) => (
+              <Link
+                to={genre.id ? `/genres/${genre.id}` : `/genres/${encodeURIComponent(genre.name)}`}
+                key={genre.id ?? genre.name}
                 className="bg-surface-variant text-on-surface-variant font-bold text-[10px] uppercase px-3 py-1.5 rounded-sm hover:bg-primary hover:text-on-primary transition-colors cursor-pointer"
               >
-                {genre}
+                {genre.name}
               </Link>
             ))}
           </div>
@@ -957,13 +1149,6 @@ const DetailPage: React.FC = () => {
               >
                 <ViconicIcon name="favorite" size={13} className="shrink-0" />
                 {isFollowed ? 'Đã Theo Dõi' : 'Theo Dõi'}
-              </button>
-              <button
-                onClick={() => setShowDonateModal(true)}
-                className="font-bold text-xs px-4 py-2 rounded-sm transition-all duration-200 flex items-center gap-1.5 border border-amber-500 bg-amber-500 text-white hover:bg-amber-600 hover:border-amber-600 active:scale-95 shadow-sm shadow-amber-500/10 dark:bg-amber-600 dark:border-amber-600 dark:hover:bg-amber-700 dark:hover:border-amber-700"
-              >
-                <ViconicIcon name="b3:cup-hot-fill" size={13} className="shrink-0" />
-                Donate
               </button>
             </div>
 
@@ -1097,23 +1282,15 @@ const DetailPage: React.FC = () => {
                 Không tìm thấy chương nào phù hợp.
               </div>
             )}
-          </div>
-          {hasMoreChapters && (
-            <button
-              onClick={handleLoadMoreChapters}
-              disabled={chaptersLoadingMore}
-              className="w-full mt-2 py-2 font-bold text-xs text-primary hover:bg-primary/5 rounded-sm border border-dashed border-outline-variant transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
-            >
-              {chaptersLoadingMore ? (
-                <>
+            {hasMoreChapters && (
+              <div ref={chaptersSentinelRef} className="py-2 flex items-center justify-center gap-1.5 text-[10px] text-on-surface-variant/50">
+                {chaptersLoadingMore && (
                   <span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  Đang tải...
-                </>
-              ) : (
-                `Tải thêm ${chaptersTotalCount - chapters.length} chương`
-              )}
-            </button>
-          )}
+                )}
+                Đang tải thêm chương...
+              </div>
+            )}
+          </div>
         </section>
       </div>
 
@@ -1178,10 +1355,12 @@ const DetailPage: React.FC = () => {
                         to={`/detail/${fav.id}`}
                         className="flex gap-3 hover:bg-surface-variant/30 p-1.5 rounded transition-colors group"
                       >
-                        <img 
-                          src={fav.cover} 
-                          alt={fav.title} 
-                          className="w-10 h-14 object-cover rounded-sm border border-outline-variant/50 shrink-0" 
+                        <img
+                          src={fav.cover}
+                          alt={fav.title}
+                          className="w-10 h-14 object-cover rounded-sm border border-outline-variant/50 shrink-0"
+                          loading="lazy"
+                          decoding="async"
                         />
                         <div className="min-w-0 flex-grow flex flex-col justify-center">
                           <h4 className="font-bold text-xs text-on-surface line-clamp-1 group-hover:text-primary transition-colors">
@@ -1231,10 +1410,12 @@ const DetailPage: React.FC = () => {
                       to={`/detail/${hist.id}`}
                       className="flex gap-3 hover:bg-surface-variant/30 p-1.5 rounded transition-colors group animate-in fade-in duration-300"
                     >
-                      <img 
-                        src={hist.cover} 
-                        alt={hist.title} 
-                        className="w-10 h-14 object-cover rounded-sm border border-outline-variant/50 shrink-0" 
+                      <img
+                        src={hist.cover}
+                        alt={hist.title}
+                        className="w-10 h-14 object-cover rounded-sm border border-outline-variant/50 shrink-0"
+                        loading="lazy"
+                        decoding="async"
                       />
                       <div className="min-w-0 flex-grow flex flex-col justify-center">
                         <h4 className="font-bold text-xs text-on-surface line-clamp-1 group-hover:text-primary transition-colors">
@@ -1275,6 +1456,8 @@ const DetailPage: React.FC = () => {
           </div>
         </section>
 
+
+
         {/* Hot Ranking Widget */}
         <section className="bg-surface border border-outline-variant/50 p-6 rounded-sm shadow-sm animate-in fade-in duration-300">
           <h2 className="font-display-lg text-lg md:text-xl text-on-surface flex items-center gap-2 mb-4 border-b border-outline-variant/50 pb-3">
@@ -1299,10 +1482,12 @@ const DetailPage: React.FC = () => {
                   <span className={`w-5 h-5 flex items-center justify-center rounded-sm text-[10px] font-bold ${rankColor} shrink-0`}>
                     {index + 1}
                   </span>
-                  <img 
-                    src={novel.cover} 
-                    alt={novel.title} 
-                    className="w-10 h-14 object-cover rounded-sm border border-outline-variant/50 shrink-0" 
+                  <img
+                    src={novel.cover}
+                    alt={novel.title}
+                    className="w-10 h-14 object-cover rounded-sm border border-outline-variant/50 shrink-0"
+                    loading="lazy"
+                    decoding="async"
                   />
                   <div className="min-w-0 flex-grow">
                     <h4 className="font-bold text-xs text-on-surface line-clamp-1 group-hover:text-primary transition-colors">
@@ -1325,6 +1510,110 @@ const DetailPage: React.FC = () => {
         </section>
       </div>
 
+        {/* Contributors Widget - Spans 12 columns, placed right above comments */}
+        <section className="md:col-span-12 bg-gradient-to-br from-amber-500/5 via-surface to-surface border border-amber-500/30 p-6 rounded-xl shadow-md shadow-amber-500/5 mt-6">
+          <div className="flex items-center justify-between mb-5 border-b border-amber-500/20 pb-3 gap-3 flex-wrap">
+            <h2 className="font-display-lg text-lg md:text-xl text-amber-955 flex items-center gap-2.5 truncate font-extrabold">
+              <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center border border-amber-500/25 shrink-0">
+                <ViconicIcon name="volunteer_activism" size={18} className="text-amber-600 dark:text-amber-400" />
+              </div>
+              <span>Bảng Vàng Đóng Góp</span>
+            </h2>
+            <div className="flex items-center gap-2.5">
+              <button
+                onClick={() => setShowDonateModal(true)}
+                className="font-bold text-xs px-4 py-2 rounded-lg transition-all duration-200 flex items-center gap-1.5 border border-amber-500 bg-amber-500 text-white hover:bg-amber-600 hover:border-amber-600 active:scale-95 shadow-md shadow-amber-500/20 dark:bg-amber-600 dark:border-amber-600 dark:hover:bg-amber-700 dark:hover:border-amber-700"
+              >
+                <ViconicIcon name="b3:cup-hot-fill" size={13} className="shrink-0" />
+                Ủng Hộ Dịch Giả
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-amber-500/50 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-amber-500 [scrollbar-width:thin] [scrollbar-color:rgba(245,158,11,0.5)_transparent]">
+            {contributors.map((c, index) => {
+              const rankBadge = index === 0 ? (
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-yellow-400 to-amber-500 text-white flex items-center justify-center text-xs font-black border border-yellow-300 shadow-sm shrink-0">1</div>
+              ) : index === 1 ? (
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-slate-300 to-slate-400 text-white flex items-center justify-center text-xs font-black border border-slate-200 shadow-sm shrink-0">2</div>
+              ) : index === 2 ? (
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-amber-600 to-orange-500 text-white flex items-center justify-center text-xs font-black border border-orange-300 shadow-sm shrink-0">3</div>
+              ) : (
+                <div className="w-6 h-6 rounded-full bg-surface-variant text-on-surface-variant flex items-center justify-center text-[10px] font-bold border border-outline-variant/40 shrink-0">{index + 1}</div>
+              );
+
+              const cardStyle = index === 0
+                ? 'bg-gradient-to-r from-amber-500/8 via-amber-500/3 to-transparent border-amber-500/25 shadow-xs shadow-amber-500/5 hover:border-amber-500/50'
+                : index === 1
+                  ? 'bg-gradient-to-r from-slate-400/6 via-slate-400/2 to-transparent border-slate-400/15 hover:border-slate-400/35'
+                  : index === 2
+                    ? 'bg-gradient-to-r from-orange-400/6 via-orange-400/2 to-transparent border-orange-400/15 hover:border-orange-400/35'
+                    : 'bg-surface hover:bg-surface-variant/20 border-outline-variant/40 hover:border-outline-variant/80';
+
+              const avatarBorder = index === 0
+                ? 'border-2 border-amber-400 shadow-sm shadow-amber-500/20'
+                : index === 1
+                  ? 'border-2 border-slate-300'
+                  : index === 2
+                    ? 'border-2 border-orange-300'
+                    : 'border border-outline-variant/60';
+
+              const nameColor = index === 0
+                ? 'text-amber-955 dark:text-amber-300 font-extrabold'
+                : 'text-on-surface font-bold';
+
+              return (
+                <div
+                  key={c.user_id}
+                  className={`flex justify-between items-center p-3 rounded-lg transition-all duration-200 border bg-surface group ${cardStyle}`}
+                >
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <div className="relative shrink-0 flex items-center justify-center">
+                      {rankBadge}
+                      {index === 0 && (
+                        <span className="absolute -top-3 -left-2 text-[10px] transform -rotate-12 drop-shadow-sm select-none">👑</span>
+                      )}
+                    </div>
+                    <img
+                      src={c.user_avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${c.user_name}`}
+                      alt={c.user_name}
+                      className={`w-9 h-9 rounded-full object-cover shrink-0 ${avatarBorder}`}
+                      loading="lazy"
+                      decoding="async"
+                    />
+                    <div className="min-w-0">
+                      <p className={`text-xs truncate ${nameColor} group-hover:text-primary transition-colors`}>{c.user_name}</p>
+                      <p className="text-[10px] text-on-surface-variant/80 mt-0.5">{c.donation_count} lần ủng hộ</p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center shrink-0">
+                    <div className="flex items-center gap-1.5 bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/20 px-3 py-1 rounded-full">
+                      <ViconicIcon name="fehc:coin" size={11} className="text-amber-500 shrink-0" />
+                      <span className="font-black text-xs text-amber-700 dark:text-amber-400">
+                        {c.total_xu.toLocaleString('vi-VN')} xu
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {contributors.length === 0 && (
+              <div className="text-center py-6 text-xs text-on-surface-variant/70 border border-dashed border-outline-variant/40 rounded-sm">
+                Chưa có ai ủng hộ truyện này. Hãy là người đầu tiên!
+              </div>
+            )}
+            {contributors.length < contributorsCount && (
+              <div ref={contributorsSentinelRef} className="py-3 flex items-center justify-center gap-1.5 text-[10px] text-on-surface-variant/50">
+                {contributorsLoadingMore && (
+                  <span className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                )}
+                Đang tải thêm người đóng góp...
+              </div>
+            )}
+          </div>
+        </section>
+
       {/* Thoughts/Comments at the very bottom spanning full width */}
       <section className="md:col-span-12 bg-surface border border-outline-variant/50 p-6 rounded-sm shadow-sm mt-6">
       <div className="flex items-center justify-between mb-4 border-b border-outline-variant/50 pb-3 gap-3 flex-wrap">
@@ -1346,8 +1635,8 @@ const DetailPage: React.FC = () => {
             type="button"
             onClick={() => {
               setCommentTab('chapter');
-              if (!chapterCommentsLoaded && id) {
-                CommentService.getChapterCommentsByStory(id)
+              if (!chapterCommentsLoaded && novel?.slug) {
+                CommentService.getChapterCommentsByStory(novel.slug)
                   .then(data => { setChapterComments(data); setChapterCommentsLoaded(true); })
                   .catch(() => setChapterCommentsLoaded(true));
               }
@@ -1512,37 +1801,96 @@ const DetailPage: React.FC = () => {
             className={`flex gap-3 p-3 rounded-sm bg-surface hover:bg-surface-variant/20 transition-all duration-300 border ${highlightedCommentId === comment.id ? 'border-primary shadow-md shadow-primary/20 ring-1 ring-primary/40' : 'border-outline-variant/50'}`}
           >
             <div className="relative shrink-0">
-              {isUserVIP(comment.user) ? (
+              {comment.isVip ? (
                 <div className="w-10 h-10 rounded-sm vip-avatar-rainbow">
-                  <img alt={comment.user} className="w-full h-full rounded-sm object-cover bg-white" src={comment.avatar} />
+                  <img alt={comment.user} className="w-full h-full rounded-sm object-cover bg-white" src={comment.avatar} loading="lazy" decoding="async" />
                 </div>
               ) : (
-                <img alt={comment.user} className="w-10 h-10 rounded-sm object-cover border border-outline-variant/50" src={comment.avatar} />
+                <img alt={comment.user} className="w-10 h-10 rounded-sm object-cover border border-outline-variant/50" src={comment.avatar} loading="lazy" decoding="async" />
               )}
             </div>
             <div className="flex-grow min-w-0">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5 truncate">
-                  <span className={`font-label-bold text-xs truncate ${isUserVIP(comment.user) ? 'text-primary font-black' : 'text-on-surface'}`}>
+                  <span className={`font-label-bold text-xs truncate ${comment.isVip ? 'text-primary font-black' : 'text-on-surface'}`}>
                     {comment.user}
                   </span>
-                  {isUserVIP(comment.user) && (
+                  {comment.isVip && (
                     <span className="vip-badge-rainbow select-none shrink-0">
                       <span className="vip-badge-rainbow-inner">
                         <span className="vip-text-rainbow text-[7px] font-black uppercase">VIP</span>
                       </span>
                     </span>
                   )}
+                  {comment.isStaff && (
+                    <span className="admin-badge select-none shrink-0">ADMIN</span>
+                  )}
                   <span className="text-[9px] text-on-surface-variant font-bold uppercase tracking-widest opacity-80 shrink-0">{comment.time}</span>
                 </div>
-                <button className="text-outline hover:text-primary transition-colors flex items-center justify-center shrink-0">
-                  <ViconicIcon name="more_horiz" size={14} className="shrink-0" />
-                </button>
+                {(comment.user === currentUser?.name || currentUser?.is_staff) && (
+                  <div className="relative comment-menu-container">
+                    <button
+                      onClick={() => setActiveCommentMenuId(activeCommentMenuId === comment.id ? null : comment.id)}
+                      className="text-outline hover:text-primary transition-colors flex items-center justify-center shrink-0 p-1 rounded-sm"
+                    >
+                      <ViconicIcon name="more_horiz" size={14} className="shrink-0" />
+                    </button>
+                    {activeCommentMenuId === comment.id && (
+                      <div className="absolute right-0 top-full mt-1.5 w-24 border border-outline-variant/50 shadow-xl bg-surface rounded-sm overflow-hidden flex flex-col z-30 animate-in fade-in slide-in-from-top-1 duration-150">
+                        {comment.user === currentUser?.name && (
+                          <button
+                            onClick={() => handleStartEdit(comment.id, comment.text)}
+                            className="px-3 py-2 text-left text-[11px] font-bold hover:bg-primary/5 transition-colors border-b last:border-b-0 border-outline-variant/30"
+                          >
+                            Sửa
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDeleteComment(comment.id)}
+                          className="px-3 py-2 text-left text-[11px] font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                        >
+                          Xóa
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-              <p 
-                className="font-body-ui text-[12px] text-on-surface mt-1 leading-relaxed text-justify break-words"
-                dangerouslySetInnerHTML={{ __html: renderCommentContentHtml(comment.text) }}
-              />
+              {editingCommentId === comment.id ? (
+                <div className="flex flex-col gap-2 mt-2">
+                  <div
+                    contentEditable={true}
+                    ref={(el) => {
+                      if (el && !el.dataset.initialized) {
+                        el.innerHTML = editingCommentText;
+                        el.dataset.initialized = 'true';
+                      }
+                    }}
+                    onInput={(e) => setEditingCommentText(e.currentTarget.innerHTML)}
+                    className="w-full bg-surface border border-outline-variant/50 focus:border-primary focus:ring-0 rounded-sm p-2.5 font-body-ui text-xs min-h-[60px] outline-none shadow-inner"
+                    dir="ltr"
+                  />
+                  <div className="flex gap-2 justify-end">
+                    <button
+                      onClick={() => setEditingCommentId(null)}
+                      className="px-3 py-1.5 border border-dashed rounded-sm text-[10px] font-bold opacity-75 hover:opacity-100 transition-colors"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      onClick={() => handleSaveEdit(comment.id)}
+                      className="px-3 py-1.5 bg-primary text-on-primary rounded-sm text-[10px] font-bold hover:bg-primary/95 transition-all shadow-sm active:scale-95"
+                    >
+                      Lưu
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p
+                  className="font-body-ui text-[12px] text-on-surface mt-1 leading-relaxed text-justify break-words"
+                  dangerouslySetInnerHTML={{ __html: renderCommentContentHtml(comment.text) }}
+                />
+              )}
               <div className="flex items-center gap-4 mt-2">
                 <button 
                   onClick={() => handleLikeComment(comment.id)}
@@ -1572,31 +1920,97 @@ const DetailPage: React.FC = () => {
                 <div className="mt-3.5 space-y-3.5 pl-4 border-l-2 border-outline-variant/30 animate-in fade-in duration-300">
                   {comment.replies.map((reply) => (
                     <div key={reply.id} className="flex gap-2.5 bg-surface-variant/20 p-2.5 rounded-sm border border-outline-variant/20">
-                      {isUserVIP(reply.user) ? (
+                      {reply.isVip ? (
                         <div className="w-8 h-8 rounded-sm vip-avatar-rainbow shrink-0">
-                          <img alt={reply.user} className="w-full h-full rounded-sm object-cover bg-white" src={reply.avatar} />
+                          <img alt={reply.user} className="w-full h-full rounded-sm object-cover bg-white" src={reply.avatar} loading="lazy" decoding="async" />
                         </div>
                       ) : (
-                        <img alt={reply.user} className="w-8 h-8 rounded-sm object-cover border border-outline-variant/50 shrink-0" src={reply.avatar} />
+                        <img alt={reply.user} className="w-8 h-8 rounded-sm object-cover border border-outline-variant/50 shrink-0" src={reply.avatar} loading="lazy" decoding="async" />
                       )}
                       <div className="flex-grow min-w-0">
-                        <div className="flex items-center gap-1.5 truncate">
-                          <span className={`font-label-bold text-[11px] truncate ${isUserVIP(reply.user) ? 'text-primary font-black' : 'text-on-surface'}`}>
-                            {reply.user}
-                          </span>
-                          {isUserVIP(reply.user) && (
-                            <span className="vip-badge-rainbow select-none shrink-0">
-                              <span className="vip-badge-rainbow-inner">
-                                <span className="vip-text-rainbow text-[7px] font-black uppercase">VIP</span>
-                              </span>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 truncate">
+                            <span className={`font-label-bold text-[11px] truncate ${reply.isVip ? 'text-primary font-black' : 'text-on-surface'}`}>
+                              {reply.user}
                             </span>
+                            {reply.isVip && (
+                              <span className="vip-badge-rainbow select-none shrink-0">
+                                <span className="vip-badge-rainbow-inner">
+                                  <span className="vip-text-rainbow text-[7px] font-black uppercase">VIP</span>
+                                </span>
+                              </span>
+                            )}
+                            {reply.isStaff && (
+                              <span className="admin-badge select-none shrink-0">ADMIN</span>
+                            )}
+                            <span className="text-[8px] text-on-surface-variant font-bold uppercase tracking-widest opacity-80 shrink-0">{reply.time}</span>
+                          </div>
+
+                          {(reply.user === currentUser?.name || currentUser?.is_staff) && (
+                            <div className="relative comment-menu-container">
+                              <button
+                                onClick={() => setActiveCommentMenuId(activeCommentMenuId === reply.id ? null : reply.id)}
+                                className="text-outline hover:text-primary transition-colors flex items-center justify-center shrink-0 p-1 rounded-sm"
+                              >
+                                <ViconicIcon name="more_horiz" size={13} className="shrink-0" />
+                              </button>
+                              {activeCommentMenuId === reply.id && (
+                                <div className="absolute right-0 top-full mt-1.5 w-24 border border-outline-variant/50 shadow-xl bg-surface rounded-sm overflow-hidden flex flex-col z-30 animate-in fade-in slide-in-from-top-1 duration-150">
+                                  {reply.user === currentUser?.name && (
+                                    <button
+                                      onClick={() => handleStartEdit(reply.id, reply.text)}
+                                      className="px-3 py-2 text-left text-[11px] font-bold hover:bg-primary/5 transition-colors border-b last:border-b-0 border-outline-variant/30"
+                                    >
+                                      Sửa
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => handleDeleteComment(reply.id, comment.id)}
+                                    className="px-3 py-2 text-left text-[11px] font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                                  >
+                                    Xóa
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           )}
-                          <span className="text-[8px] text-on-surface-variant font-bold uppercase tracking-widest opacity-80 shrink-0">{reply.time}</span>
                         </div>
-                        <p 
-                          className="font-body-ui text-[11.5px] text-on-surface mt-1 leading-relaxed text-justify break-words"
-                          dangerouslySetInnerHTML={{ __html: renderCommentContentHtml(reply.text) }}
-                        />
+
+                        {editingCommentId === reply.id ? (
+                          <div className="flex flex-col gap-2 mt-1.5">
+                            <div
+                              contentEditable={true}
+                              ref={(el) => {
+                                if (el && !el.dataset.initialized) {
+                                  el.innerHTML = editingCommentText;
+                                  el.dataset.initialized = 'true';
+                                }
+                              }}
+                              onInput={(e) => setEditingCommentText(e.currentTarget.innerHTML)}
+                              className="w-full bg-surface border border-outline-variant/50 focus:border-primary focus:ring-0 rounded-sm p-2 font-body-ui text-[11px] min-h-[50px] outline-none shadow-inner"
+                              dir="ltr"
+                            />
+                            <div className="flex gap-2 justify-end">
+                              <button
+                                onClick={() => setEditingCommentId(null)}
+                                className="px-3 py-1.5 border border-dashed rounded-sm text-[10px] font-bold opacity-75 hover:opacity-100 transition-colors"
+                              >
+                                Hủy
+                              </button>
+                              <button
+                                onClick={() => handleSaveEdit(reply.id, comment.id)}
+                                className="px-3 py-1.5 bg-primary text-on-primary rounded-sm text-[10px] font-bold hover:bg-primary/95 transition-all shadow-sm active:scale-95"
+                              >
+                                Lưu
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <p
+                            className="font-body-ui text-[11.5px] text-on-surface mt-1 leading-relaxed text-justify break-words"
+                            dangerouslySetInnerHTML={{ __html: renderCommentContentHtml(reply.text) }}
+                          />
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1723,6 +2137,8 @@ const DetailPage: React.FC = () => {
                   alt={comment.user_name || 'Ẩn danh'}
                   className="w-10 h-10 rounded-sm shrink-0 object-cover border border-outline-variant/50"
                   src={comment.user_avatar || 'https://placehold.co/40x40/e2e8f0/64748b?text=?'}
+                  loading="lazy"
+                  decoding="async"
                 />
                 <div className="flex-grow min-w-0">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -1746,6 +2162,8 @@ const DetailPage: React.FC = () => {
                             alt={reply.user_name || 'Ẩn danh'}
                             className="w-7 h-7 rounded-sm shrink-0 object-cover border border-outline-variant/50"
                             src={reply.user_avatar || 'https://placehold.co/28x28/e2e8f0/64748b?text=?'}
+                            loading="lazy"
+                            decoding="async"
                           />
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5 mb-0.5">
@@ -1792,6 +2210,15 @@ const DetailPage: React.FC = () => {
             }
           } catch (e) {}
           window.dispatchEvent(new Event('balance-updated'));
+          if (novel?.slug) {
+            DonationService.getLeaderboard({ story_slug: novel.slug, page: 1, page_size: CONTRIBUTORS_PAGE_SIZE })
+              .then(data => {
+                setContributors(data.results);
+                setContributorsCount(data.count);
+                setContributorsPage(1);
+              })
+              .catch(() => {});
+          }
         }}
       />
     )}

@@ -70,6 +70,7 @@ export default function CoinPage() {
 
   const countdown = useCountdown(deposit?.expires_at ?? null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const paymentContainerRef = useRef<HTMLDivElement>(null)
 
   // Expiration calculation helper
   const getDaysRemaining = (expiryStr: string) => {
@@ -111,6 +112,16 @@ export default function CoinPage() {
       }
     }
   }, [])
+
+  // Scroll payment container to center of viewport on status changes
+  useEffect(() => {
+    if (deposit) {
+      const timer = setTimeout(() => {
+        paymentContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 150)
+      return () => clearTimeout(timer)
+    }
+  }, [deposit, reported, depositStatus])
 
   useEffect(() => {
     if (!user) return
@@ -578,8 +589,9 @@ export default function CoinPage() {
       {/* Tab: Nạp xu */}
       {activeTab === 'coins' && (
         <div className="space-y-8 animate-in fade-in duration-300">
-          <section className="space-y-6">
-            <div className="flex items-center justify-between">
+          {!deposit && (
+            <section className="space-y-6">
+              <div className="flex items-center justify-between">
               <h2 className="font-bold text-base text-on-surface flex items-center gap-2">
                 <ViconicIcon name="shopping_cart" size={18} className="text-primary" />
                 <span>Chọn gói nạp xu</span>
@@ -739,241 +751,308 @@ export default function CoinPage() {
                 </button>
               </div>
             )}
-          </section>
-
-          {/* Payment Status Banners */}
-          {deposit && depositStatus === 'success' && (
-            <section className="p-8 border border-emerald-250 bg-emerald-50/40 rounded-xl text-center space-y-4 animate-in zoom-in-95 duration-300">
-              <div className="w-16 h-16 bg-emerald-500 text-white rounded-xl flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/10">
-                <ViconicIcon name="check_circle" size={36} />
-              </div>
-              <div className="space-y-1">
-                <h3 className="font-black text-2xl text-emerald-800">Nạp xu thành công!</h3>
-                <p className="text-emerald-700 text-sm">
-                  Giao dịch nạp <strong className="text-lg font-black">{deposit.coins.toLocaleString('vi-VN')} xu</strong> đã được cộng vào tài khoản.
-                </p>
-                <p className="text-emerald-600 text-xs font-semibold">
-                  Số dư hiện tại: {coinBalance.toLocaleString('vi-VN')} xu
-                </p>
-              </div>
-              <button
-                onClick={() => { setDeposit(null); setSelectedPkg(null); setDepositStatus(null); localStorage.removeItem('pending_deposit') }}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-all"
-              >
-                Tiếp tục nạp xu
-              </button>
             </section>
           )}
 
-          {deposit && depositStatus === 'expired' && (
-            <section className="p-8 border border-red-200/50 bg-red-50/40 rounded-xl text-center space-y-4 animate-in zoom-in-95 duration-300">
-              <div className="w-16 h-16 bg-red-500 text-white rounded-xl flex items-center justify-center mx-auto shadow-lg shadow-red-500/10">
-                <ViconicIcon name="error" size={36} />
-              </div>
-              <div className="space-y-1">
-                <h3 className="font-black text-xl text-red-800">Mã giao dịch đã hết hạn</h3>
-                <p className="text-red-700 text-sm">
-                  Thời gian chờ thanh toán đã trôi qua. Nếu bạn đã chuyển khoản, hãy liên hệ Admin để được hỗ trợ.
-                </p>
-              </div>
-              <button
-                onClick={() => { setDeposit(null); setSelectedPkg(null); setDepositStatus(null); setReported(false); localStorage.removeItem('pending_deposit') }}
-                className="bg-red-600 hover:bg-red-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-all"
-              >
-                Tạo lệnh mới
-              </button>
-            </section>
-          )}
-
-          {deposit && depositStatus === 'cancelled' && (
-            <section className="p-8 border border-red-200/50 bg-red-50/40 rounded-xl text-center space-y-4 animate-in zoom-in-95 duration-300">
-              <div className="w-16 h-16 bg-red-500 text-white rounded-xl flex items-center justify-center mx-auto shadow-lg shadow-red-500/10">
-                <ViconicIcon name="cancel" size={36} />
-              </div>
-              <div className="space-y-1">
-                <h3 className="font-black text-xl text-red-800">Giao dịch đã bị từ chối</h3>
-                <p className="text-red-700 text-sm">
-                  Yêu cầu nạp xu này đã bị từ chối bởi hệ thống hoặc quản trị viên. Nếu bạn đã chuyển khoản, hãy liên hệ Admin.
-                </p>
-              </div>
-              <button
-                onClick={() => { setDeposit(null); setSelectedPkg(null); setDepositStatus(null); setReported(false); localStorage.removeItem('pending_deposit') }}
-                className="bg-red-600 hover:bg-red-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-all"
-              >
-                Tạo lệnh mới
-              </button>
-            </section>
-          )}
-
-          {/* Pending Deposit QR Card */}
-          {deposit && !depositStatus && (
-            <section className="p-6 border border-emerald-200/40 bg-emerald-50/10 rounded-xl space-y-6 animate-in fade-in duration-300 shadow-sm">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-emerald-100/60">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-md shadow-emerald-600/5">
-                    <ViconicIcon name="qr_code" size={18} />
+          {/* Active Payment Flow Wrapper */}
+          {deposit && (
+            <div ref={paymentContainerRef} className="scroll-mt-28">
+              {/* Payment Status Banners */}
+              {depositStatus === 'success' && (
+                <section className="p-8 border border-emerald-250 bg-emerald-50/40 rounded-xl text-center space-y-4 animate-in zoom-in-95 duration-300">
+                  <div className="w-16 h-16 bg-emerald-500 text-white rounded-xl flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/10">
+                    <ViconicIcon name="check_circle" size={36} />
                   </div>
-                  <div>
-                    <h3 className="font-bold text-base text-emerald-900">Thông tin chuyển khoản</h3>
-                    <p className="text-xs text-on-surface-variant">Thực hiện chuyển khoản theo các thông tin bên dưới</p>
+                  <div className="space-y-1">
+                    <h3 className="font-black text-2xl text-emerald-800">Nạp xu thành công!</h3>
+                    <p className="text-emerald-700 text-sm">
+                      Giao dịch nạp <strong className="text-lg font-black">{deposit.coins.toLocaleString('vi-VN')} xu</strong> đã được cộng vào tài khoản.
+                    </p>
+                    <p className="text-emerald-600 text-xs font-semibold">
+                      Số dư hiện tại: {coinBalance.toLocaleString('vi-VN')} xu
+                    </p>
                   </div>
-                </div>
-                {countdown && (
-                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold font-mono tabular-nums shadow-sm border ${countdown <= '03:00'
-                      ? 'bg-red-50 text-red-600 border-red-200/60 animate-pulse'
-                      : 'bg-emerald-50 text-emerald-700 border-emerald-200/60'
-                    }`}>
-                    <span>⏱ Hết hạn sau:</span>
-                    <span>{countdown}</span>
+                  <button
+                    onClick={() => { setDeposit(null); setSelectedPkg(null); setDepositStatus(null); localStorage.removeItem('pending_deposit') }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-all"
+                  >
+                    Tiếp tục nạp xu
+                  </button>
+                </section>
+              )}
+
+              {depositStatus === 'expired' && (
+                <section className="p-8 border border-red-200/50 bg-red-50/40 rounded-xl text-center space-y-4 animate-in zoom-in-95 duration-300">
+                  <div className="w-16 h-16 bg-red-500 text-white rounded-xl flex items-center justify-center mx-auto shadow-lg shadow-red-500/10">
+                    <ViconicIcon name="error" size={36} />
                   </div>
-                )}
-              </div>
-
-              {/* Numbered Flow Guide */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm bg-white border border-emerald-100/60 p-4 rounded-xl">
-                <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0">1</span>
-                  <span className="text-on-surface font-semibold">Quét mã QR bằng App ngân hàng</span>
-                </div>
-                <div className="flex items-center gap-2 border-t sm:border-t-0 sm:border-l border-emerald-100/60 pt-2 sm:pt-0 sm:pl-3">
-                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0">2</span>
-                  <span className="text-on-surface font-semibold">Kiểm tra Số tiền & Nội dung chính xác</span>
-                </div>
-                <div className="flex items-center gap-2 border-t sm:border-t-0 sm:border-l border-emerald-100/60 pt-2 sm:pt-0 sm:pl-3">
-                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0">3</span>
-                  <span className="text-on-surface font-semibold">Hệ thống đối soát cộng xu tự động</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
-                {/* QR Code column */}
-                <div className="md:col-span-4 flex flex-col items-center">
-                  <div className="relative p-2.5 rounded-xl bg-white border border-emerald-200/60 shadow-sm overflow-hidden">
-                    <img
-                      src={deposit.qr_url}
-                      alt="VietQR"
-                      width={200}
-                      height={200}
-                      className="block rounded-lg"
-                    />
-                    {countdown <= '03:00' && (
-                      <div className="absolute inset-0 bg-black/5 pointer-events-none border-2 border-red-500/50 rounded-xl animate-pulse" />
-                    )}
+                  <div className="space-y-1">
+                    <h3 className="font-black text-xl text-red-800">Mã giao dịch đã hết hạn</h3>
+                    <p className="text-red-700 text-sm">
+                      Thời gian chờ thanh toán đã trôi qua. Nếu bạn đã chuyển khoản, hãy liên hệ Admin để được hỗ trợ.
+                    </p>
                   </div>
-                  <p className="text-[10px] text-center text-on-surface-variant mt-2 max-w-[200px]">
-                    Quét bằng app ngân hàng của bạn. Nội dung và số tiền sẽ được điền tự động.
-                  </p>
-                </div>
+                  <button
+                    onClick={() => { setDeposit(null); setSelectedPkg(null); setDepositStatus(null); setReported(false); localStorage.removeItem('pending_deposit') }}
+                    className="bg-red-600 hover:bg-red-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-all"
+                  >
+                    Tạo lệnh mới
+                  </button>
+                </section>
+              )}
 
-                {/* Details column */}
-                <div className="md:col-span-8 space-y-3">
-                  {/* Coins received */}
-                  <div className="flex items-center justify-between p-3 bg-white border border-emerald-100/60 rounded-xl text-sm shadow-sm">
-                    <span className="text-on-surface-variant font-medium">Số xu nhận</span>
-                    <span className="font-black text-primary text-base">{deposit.coins.toLocaleString('vi-VN')} xu</span>
+              {depositStatus === 'cancelled' && (
+                <section className="p-8 border border-red-200/50 bg-red-50/40 rounded-xl text-center space-y-4 animate-in zoom-in-95 duration-300">
+                  <div className="w-16 h-16 bg-red-500 text-white rounded-xl flex items-center justify-center mx-auto shadow-lg shadow-red-500/10">
+                    <ViconicIcon name="cancel" size={36} />
                   </div>
-
-                  {/* Amount */}
-                  <div className="flex items-center justify-between p-3 bg-white border border-emerald-100/60 rounded-xl text-sm shadow-sm">
-                    <span className="text-on-surface-variant font-medium">Số tiền chuyển khoản</span>
-                    <div className="flex items-center gap-2">
-                      <span className="font-black text-on-surface">{formatVND(deposit.vnd_amount)}</span>
-                      <button
-                        onClick={() => handleCopy(deposit.vnd_amount.toString(), 'amount')}
-                        className="p-1.5 hover:bg-surface-variant/40 rounded-lg transition-colors text-on-surface-variant"
-                        title="Sao chép số tiền"
-                      >
-                        <ViconicIcon name={copiedField === 'amount' ? 'check' : 'content_copy'} size={14} className={copiedField === 'amount' ? 'text-emerald-600' : ''} />
-                      </button>
-                    </div>
+                  <div className="space-y-1">
+                    <h3 className="font-black text-xl text-red-800">Giao dịch đã bị từ chối</h3>
+                    <p className="text-red-700 text-sm">
+                      Yêu cầu nạp xu này đã bị từ chối bởi hệ thống hoặc quản trị viên. Nếu bạn đã chuyển khoản, hãy liên hệ Admin.
+                    </p>
                   </div>
+                  <button
+                    onClick={() => { setDeposit(null); setSelectedPkg(null); setDepositStatus(null); setReported(false); localStorage.removeItem('pending_deposit') }}
+                    className="bg-red-600 hover:bg-red-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-all"
+                  >
+                    Tạo lệnh mới
+                  </button>
+                </section>
+              )}
 
-                  {/* Account number */}
-                  {deposit.account_number && (
-                    <div className="flex items-center justify-between p-3 bg-white border border-emerald-100/60 rounded-xl text-sm shadow-sm">
-                      <span className="text-on-surface-variant font-medium">Số tài khoản</span>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-black text-on-surface">{deposit.account_number}</span>
-                        <button
-                          onClick={() => handleCopy(deposit.account_number!, 'account')}
-                          className="p-1.5 hover:bg-surface-variant/40 rounded-lg transition-colors text-on-surface-variant"
-                          title="Sao chép số tài khoản"
-                        >
-                          <ViconicIcon name={copiedField === 'account' ? 'check' : 'content_copy'} size={14} className={copiedField === 'account' ? 'text-emerald-600' : ''} />
-                        </button>
+              {/* Pending Deposit QR Card */}
+              {!depositStatus && !reported && (
+                <section className="p-6 border border-emerald-200/40 bg-emerald-50/10 rounded-xl space-y-6 animate-in fade-in duration-300 shadow-sm">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-emerald-100/60">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-md shadow-emerald-600/5">
+                        <ViconicIcon name="qr_code" size={18} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-base text-emerald-900">Thông tin chuyển khoản</h3>
+                        <p className="text-xs text-on-surface-variant">Thực hiện chuyển khoản theo các thông tin bên dưới</p>
                       </div>
                     </div>
-                  )}
+                    {countdown && (
+                      <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold font-mono tabular-nums shadow-sm border ${countdown <= '03:00'
+                          ? 'bg-red-50 text-red-600 border-red-200/60 animate-pulse'
+                          : 'bg-emerald-50 text-emerald-700 border-emerald-200/60'
+                        }`}>
+                        <span>⏱ Hết hạn sau:</span>
+                        <span>{countdown}</span>
+                      </div>
+                    )}
+                  </div>
 
-                  {/* Account name */}
-                  {deposit.account_name && (
-                    <div className="flex items-center justify-between p-3 bg-white border border-emerald-100/60 rounded-xl text-sm shadow-sm">
-                      <span className="text-on-surface-variant font-medium">Chủ tài khoản</span>
-                      <span className="font-bold text-on-surface">{deposit.account_name}</span>
-                    </div>
-                  )}
-
-                  {/* Description note */}
-                  <div className="flex items-center justify-between p-3 bg-amber-50/50 border border-amber-200/60 rounded-xl text-sm shadow-sm">
-                    <span className="text-amber-800 font-bold">Nội dung CK bắt buộc</span>
+                  {/* Numbered Flow Guide */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm bg-white border border-emerald-100/60 p-4 rounded-xl">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono font-black text-amber-955 select-all">{deposit.description}</span>
-                      <button
-                        onClick={() => handleCopy(deposit.description, 'desc')}
-                        className="p-1.5 hover:bg-amber-100 rounded-lg transition-colors text-amber-800"
-                        title="Sao chép nội dung chuyển khoản"
-                      >
-                        <ViconicIcon name={copiedField === 'desc' ? 'check' : 'content_copy'} size={14} className={copiedField === 'desc' ? 'text-emerald-600' : ''} />
-                      </button>
+                      <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0">1</span>
+                      <span className="text-on-surface font-semibold">Quét mã QR bằng App ngân hàng</span>
+                    </div>
+                    <div className="flex items-center gap-2 border-t sm:border-t-0 sm:border-l border-emerald-100/60 pt-2 sm:pt-0 sm:pl-3">
+                      <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0">2</span>
+                      <span className="text-on-surface font-semibold">Kiểm tra Số tiền & Nội dung chính xác</span>
+                    </div>
+                    <div className="flex items-center gap-2 border-t sm:border-t-0 sm:border-l border-emerald-100/60 pt-2 sm:pt-0 sm:pl-3 bg-amber-500/5 rounded-r-lg">
+                      <span className="w-6 h-6 rounded-full bg-amber-500 text-white flex items-center justify-center font-bold shrink-0">3</span>
+                      <span className="text-on-surface font-semibold text-amber-900">Bắt buộc nhấn "Tôi đã chuyển khoản" bên dưới</span>
                     </div>
                   </div>
 
-                  <div className="p-3.5 bg-amber-550/5 rounded-xl border border-amber-500/20 text-[11px] text-amber-900 space-y-1">
-                    <p className="font-bold flex items-center gap-1">
-                      <ViconicIcon name="warning" size={13} className="text-amber-600 shrink-0" />
-                      <span>Lưu ý đặc biệt:</span>
-                    </p>
-                    <p>• Nhập <strong>đúng nội dung chuyển khoản</strong> ở trên để hệ thống tự động đối soát và cộng xu trong 1 - 2 phút.</p>
-                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+                    {/* QR Code column */}
+                    <div className="md:col-span-4 flex flex-col items-center">
+                      <div className="relative p-2.5 rounded-xl bg-white border border-emerald-200/60 shadow-sm overflow-hidden">
+                        <img
+                          src={deposit.qr_url}
+                          alt="VietQR"
+                          width={200}
+                          height={200}
+                          className="block rounded-lg"
+                        />
+                        {countdown <= '03:00' && (
+                          <div className="absolute inset-0 bg-black/5 pointer-events-none border-2 border-red-500/50 rounded-xl animate-pulse" />
+                        )}
+                      </div>
+                      <p className="text-[10px] text-center text-on-surface-variant mt-2 max-w-[200px]">
+                        Quét bằng app ngân hàng của bạn. Nội dung và số tiền sẽ được điền tự động.
+                      </p>
+                    </div>
 
-                  {/* Report action button */}
-                  {!reported ? (
-                    <button
-                      onClick={handleReportPayment}
-                      disabled={reporting}
-                      className="flex items-center justify-center gap-2 w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3.5 rounded-xl font-bold text-sm shadow-md transition-all disabled:opacity-60"
-                    >
-                      {reporting ? (
-                        <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Đang đối soát...</>
-                      ) : (
-                        <><ViconicIcon name="check_circle" size={16} />Tôi đã chuyển khoản thành công</>
+                    {/* Details column */}
+                    <div className="md:col-span-8 space-y-3">
+                      {/* Coins received */}
+                      <div className="flex items-center justify-between p-3 bg-white border border-emerald-100/60 rounded-xl text-sm shadow-sm">
+                        <span className="text-on-surface-variant font-medium">Số xu nhận</span>
+                        <span className="font-black text-primary text-base">{deposit.coins.toLocaleString('vi-VN')} xu</span>
+                      </div>
+
+                      {/* Amount */}
+                      <div className="flex items-center justify-between p-3 bg-white border border-emerald-100/60 rounded-xl text-sm shadow-sm">
+                        <span className="text-on-surface-variant font-medium">Số tiền chuyển khoản</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-black text-on-surface">{formatVND(deposit.vnd_amount)}</span>
+                          <button
+                            onClick={() => handleCopy(deposit.vnd_amount.toString(), 'amount')}
+                            className="p-1.5 hover:bg-surface-variant/40 rounded-lg transition-colors text-on-surface-variant"
+                            title="Sao chép số tiền"
+                          >
+                            <ViconicIcon name={copiedField === 'amount' ? 'check' : 'content_copy'} size={14} className={copiedField === 'amount' ? 'text-emerald-600' : ''} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Account number */}
+                      {deposit.account_number && (
+                        <div className="flex items-center justify-between p-3 bg-white border border-emerald-100/60 rounded-xl text-sm shadow-sm">
+                          <span className="text-on-surface-variant font-medium">Số tài khoản</span>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-black text-on-surface">{deposit.account_number}</span>
+                            <button
+                              onClick={() => handleCopy(deposit.account_number!, 'account')}
+                              className="p-1.5 hover:bg-surface-variant/40 rounded-lg transition-colors text-on-surface-variant"
+                              title="Sao chép số tài khoản"
+                            >
+                              <ViconicIcon name={copiedField === 'account' ? 'check' : 'content_copy'} size={14} className={copiedField === 'account' ? 'text-emerald-600' : ''} />
+                            </button>
+                          </div>
+                        </div>
                       )}
-                    </button>
-                  ) : (
-                    <div className="flex items-center justify-center gap-2.5 w-full bg-emerald-50 border border-emerald-250 text-emerald-800 py-3.5 px-4 rounded-xl text-sm font-bold shadow-inner">
-                      <span className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin shrink-0" />
-                      Đã gửi thông báo đối soát — vui lòng kiểm tra ví sau ít phút...
-                    </div>
-                  )}
-                </div>
-              </div>
 
-              <div className="flex justify-between items-center pt-2">
-                <button
-                  onClick={() => { setDeposit(null); setSelectedPkg(null); setDepositStatus(null); setReported(false); localStorage.removeItem('pending_deposit') }}
-                  className="text-xs text-on-surface-variant hover:text-primary hover:underline transition-colors"
-                >
-                  ← Chọn gói nạp khác
-                </button>
-                <button
-                  onClick={handleCancelActiveDeposit}
-                  disabled={cancellingTxId !== null}
-                  className="text-xs text-red-500 hover:text-red-700 hover:underline transition-colors disabled:opacity-60"
-                >
-                  {cancellingTxId !== null ? 'Đang hủy...' : 'Hủy mã QR này'}
-                </button>
-              </div>
-            </section>
+                      {/* Account name */}
+                      {deposit.account_name && (
+                        <div className="flex items-center justify-between p-3 bg-white border border-emerald-100/60 rounded-xl text-sm shadow-sm">
+                          <span className="text-on-surface-variant font-medium">Chủ tài khoản</span>
+                          <span className="font-bold text-on-surface">{deposit.account_name}</span>
+                        </div>
+                      )}
+
+                      {/* Description note */}
+                      <div className="flex items-center justify-between p-3 bg-amber-5/50 border border-amber-200/60 rounded-xl text-sm shadow-sm">
+                        <span className="text-amber-800 font-bold">Nội dung CK bắt buộc</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-black text-amber-955 select-all">{deposit.description}</span>
+                          <button
+                            onClick={() => handleCopy(deposit.description, 'desc')}
+                            className="p-1.5 hover:bg-amber-100 rounded-lg transition-colors text-amber-800"
+                            title="Sao chép nội dung chuyển khoản"
+                          >
+                            <ViconicIcon name={copiedField === 'desc' ? 'check' : 'content_copy'} size={14} className={copiedField === 'desc' ? 'text-emerald-600' : ''} />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="p-3.5 bg-amber-500/5 rounded-xl border border-amber-500/20 text-[11px] text-amber-900 space-y-1">
+                        <p className="font-bold flex items-center gap-1">
+                          <ViconicIcon name="warning" size={13} className="text-amber-600 shrink-0" />
+                          <span>Lưu ý đặc biệt:</span>
+                        </p>
+                        <p>• Nhập <strong>đúng nội dung chuyển khoản</strong> ở trên để hệ thống tự động đối soát và cộng xu trong 1 - 2 phút.</p>
+                        <p className="text-red-600 font-extrabold">• Sau khi chuyển khoản, bạn BẮT BUỘC phải nhấn nút "Tôi đã chuyển khoản thành công" bên dưới để Admin check và duyệt đơn.</p>
+                      </div>
+
+                      {/* Warning banner about pressing the button */}
+                      <div className="p-4 bg-red-50 border border-red-200/80 rounded-xl text-xs text-red-950 space-y-1.5 shadow-sm">
+                        <p className="font-bold flex items-center gap-1.5 text-red-700">
+                          <ViconicIcon name="warning" size={15} className="text-red-600 shrink-0" />
+                          <span>BẮT BUỘC SAU KHI CHUYỂN KHOẢN:</span>
+                        </p>
+                        <p className="leading-relaxed">
+                          Bạn <strong>phải nhấn nút màu xanh dưới đây</strong>. Nếu không nhấn, Admin sẽ không nhận được thông báo chuyển tiền và không thể duyệt xu cho bạn.
+                        </p>
+                      </div>
+
+                      {/* Report action button */}
+                      {!reported ? (
+                        <button
+                          onClick={handleReportPayment}
+                          disabled={reporting}
+                          className="flex items-center justify-center gap-2 w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3.5 rounded-xl font-bold text-sm shadow-lg transition-all disabled:opacity-60 animate-pulse-subtle"
+                        >
+                          {reporting ? (
+                            <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Đang đối soát...</>
+                          ) : (
+                            <><ViconicIcon name="check_circle" size={16} />Tôi đã chuyển khoản thành công</>
+                          )}
+                        </button>
+                      ) : (
+                        <div className="flex items-center justify-center gap-2.5 w-full bg-emerald-50 border border-emerald-250 text-emerald-800 py-3.5 px-4 rounded-xl text-sm font-bold shadow-inner">
+                          <span className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin shrink-0" />
+                          Đã gửi thông báo đối soát — vui lòng kiểm tra ví sau ít phút...
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center pt-2">
+                    <button
+                      onClick={() => { setDeposit(null); setSelectedPkg(null); setDepositStatus(null); setReported(false); localStorage.removeItem('pending_deposit') }}
+                      className="text-xs text-on-surface-variant hover:text-primary hover:underline transition-colors"
+                    >
+                      ← Chọn gói nạp khác
+                    </button>
+                    <button
+                      onClick={handleCancelActiveDeposit}
+                      disabled={cancellingTxId !== null}
+                      className="text-xs text-red-500 hover:text-red-700 hover:underline transition-colors disabled:opacity-60"
+                    >
+                      {cancellingTxId !== null ? 'Đang hủy...' : 'Hủy mã QR này'}
+                    </button>
+                  </div>
+                </section>
+              )}
+
+              {/* Pending Deposit Awaiting Approval Card */}
+              {!depositStatus && reported && (
+                <section className="p-8 border border-amber-300 bg-amber-500/5 rounded-xl text-center space-y-4 animate-in zoom-in-95 duration-300 shadow-sm">
+                  <div className="w-16 h-16 bg-amber-500 text-white rounded-xl flex items-center justify-center mx-auto shadow-lg shadow-amber-500/10">
+                    <span className="w-8 h-8 border-4 border-white border-t-transparent rounded-full animate-spin shrink-0" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <h3 className="font-black text-2xl text-amber-800">Đang Chờ Admin Duyệt</h3>
+                    <p className="text-amber-700 text-sm leading-relaxed max-w-sm mx-auto">
+                      Yêu cầu đối soát của bạn đã được gửi thành công. Admin đang kiểm tra chuyển khoản.
+                    </p>
+                    <p className="text-[11px] text-on-surface-variant max-w-xs mx-auto leading-normal">
+                      Sau khi Admin xác nhận, trang này sẽ tự động chuyển trạng thái thành <strong>Thành công</strong>. Bạn không cần tải lại trang.
+                    </p>
+                    <div className="pt-3 text-xs text-on-surface-variant max-w-xs mx-auto space-y-1 bg-white border border-amber-100/60 p-3.5 rounded-xl text-left shadow-xs">
+                      <div className="flex justify-between py-0.5">
+                        <span className="text-on-surface-variant">Mã giao dịch:</span>
+                        <span className="font-mono font-bold text-on-surface bg-surface-variant/40 px-1.5 py-0.5 rounded text-[10px]">
+                          PUBNIH{String(deposit.transaction_id).padStart(6, '0')}
+                        </span>
+                      </div>
+                      <div className="flex justify-between py-0.5">
+                        <span className="text-on-surface-variant">Số tiền:</span>
+                        <span className="font-bold text-on-surface">{formatVND(deposit.vnd_amount)}</span>
+                      </div>
+                      <div className="flex justify-between py-0.5">
+                        <span className="text-on-surface-variant">Xu nhận được:</span>
+                        <span className="font-black text-primary">+{deposit.coins.toLocaleString('vi-VN')} xu</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="pt-2 flex justify-center gap-3">
+                    <button
+                      onClick={() => {
+                        setDeposit(null);
+                        setSelectedPkg(null);
+                        setDepositStatus(null);
+                        setReported(false);
+                        localStorage.removeItem('pending_deposit');
+                        localStorage.removeItem(`reported_${deposit.transaction_id}`);
+                      }}
+                      className="bg-surface border border-outline-variant hover:bg-surface-variant/20 text-on-surface px-5 py-2.5 rounded-xl font-bold text-xs shadow-sm transition-all"
+                    >
+                      Chọn gói nạp khác
+                    </button>
+                  </div>
+                </section>
+              )}
+            </div>
           )}
         </div>
       )}

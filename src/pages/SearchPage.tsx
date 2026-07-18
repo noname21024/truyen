@@ -2,7 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import UpdateCard from '@/components/cards/UpdateCard';
 import ViconicIcon from '@/components/ui/ViconicIcon';
+import SimplePagination from '@/components/ui/SimplePagination';
 import { NovelService } from '@/lib/api';
+
+const PAGE_SIZE = 12;
 
 const SearchPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -10,10 +13,13 @@ const SearchPage: React.FC = () => {
   const [localQuery, setLocalQuery] = useState(query);
   const [allNovels, setAllNovels] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     setLocalQuery(query);
   }, [query]);
+
+  useEffect(() => { setPage(1); }, [query]);
 
   // Load all novels from backend on mount
   useEffect(() => {
@@ -48,7 +54,7 @@ const SearchPage: React.FC = () => {
     if (!query.trim()) {
       // If query is empty, show all novels
       return allNovels.map(dbNovel => ({
-        id: dbNovel.slug,
+        id: dbNovel.id,
         title: dbNovel.title,
         author: dbNovel.author || "Đang cập nhật",
         status: dbNovel.status === 'COMPLETED' ? 'Hoàn thành' : 'Đang ra',
@@ -68,7 +74,7 @@ const SearchPage: React.FC = () => {
         return titleMatch || authorMatch || tagMatch;
       })
       .map(dbNovel => ({
-        id: dbNovel.slug,
+        id: dbNovel.id,
         title: dbNovel.title,
         author: dbNovel.author || "Đang cập nhật",
         status: dbNovel.status === 'COMPLETED' ? 'Hoàn thành' : 'Đang ra',
@@ -85,7 +91,7 @@ const SearchPage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-[1300px] mx-auto px-8 py-10 w-full min-h-screen">
+    <div className="max-w-[1300px] mx-auto px-4 sm:px-6 md:px-8 py-10 w-full min-h-screen">
       <div className="mb-10 border-b border-outline-variant/50 pb-4">
         <h1 className="font-display-lg text-xl sm:text-2xl md:text-3xl text-on-surface mb-4 flex items-center gap-2 truncate">
           <ViconicIcon name="search" size={24} className="text-primary shrink-0" />
@@ -128,20 +134,28 @@ const SearchPage: React.FC = () => {
           ))}
         </div>
       ) : novels.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 min-w-0">
-          {novels.map((novel) => (
-            <UpdateCard
-              key={novel.id}
-              id={novel.id}
-              title={novel.title}
-              chapter={`Chương ${novel.chapter_count || 1}`}
-              time="Mới cập nhật"
-              image={novel.cover}
-              tags={novel.tags}
-              views={novel.views}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 min-w-0">
+            {novels.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((novel) => (
+              <UpdateCard
+                key={novel.id}
+                id={novel.id}
+                title={novel.title}
+                chapter={`Chương ${novel.chapter_count || 1}`}
+                time="Mới cập nhật"
+                image={novel.cover}
+                tags={novel.tags}
+                views={novel.views}
+              />
+            ))}
+          </div>
+          <SimplePagination
+            currentPage={page}
+            totalPages={Math.max(1, Math.ceil(novels.length / PAGE_SIZE))}
+            onPageChange={(p) => { setPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+            className="mt-8"
+          />
+        </>
       ) : (
         <div className="text-center py-20 bg-surface border border-outline-variant/50 rounded-sm">
           <ViconicIcon name="search_off" size={40} className="text-outline-variant mb-4 block mx-auto shrink-0" />

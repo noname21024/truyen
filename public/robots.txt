@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /profile
+Disallow: /coins
+Disallow: /admin/donations
+Disallow: /auth/callback
+
+Sitemap: https://pubnihtruyen.com/sitemap.xml

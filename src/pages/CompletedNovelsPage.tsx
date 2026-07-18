@@ -7,14 +7,14 @@ import { CategoryService, NovelService } from '@/lib/api';
 type SortOption = 'newest' | 'chapters' | 'views';
 
 const SORT_LABELS: Record<SortOption, string> = {
-  newest: 'Mới cập nhật',
+  newest: 'Mới hoàn thành',
   chapters: 'Nhiều chương nhất',
   views: 'Nhiều lượt xem nhất',
 };
 
 const PAGE_SIZE = 20;
 
-const NewUpdatePage: React.FC = () => {
+const CompletedNovelsPage: React.FC = () => {
   const [novels, setNovels] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [genres, setGenres] = useState<string[]>([]);
@@ -33,7 +33,8 @@ const NewUpdatePage: React.FC = () => {
       .then(data => setGenres(data.map(c => c.name).sort((a, b) => a.localeCompare(b))))
       .catch(() => {});
 
-    NovelService.getNovels()
+    // Fetch only completed novels from the server
+    NovelService.getNovels({ status: 'COMPLETED' })
       .then(data => {
         if (data && data.length > 0) {
           const mapped = data.map(dbNovel => ({
@@ -50,7 +51,7 @@ const NewUpdatePage: React.FC = () => {
         setLoading(false);
       })
       .catch(err => {
-        console.error("Failed to load novels for new updates:", err);
+        console.error("Failed to load completed novels:", err);
         setLoading(false);
       });
   }, []);
@@ -152,14 +153,14 @@ const NewUpdatePage: React.FC = () => {
   }
 
   return (
-    <div className="max-w-[1300px] mx-auto px-4 sm:px-6 md:px-8 py-10 w-full min-h-screen">
+    <div className="max-w-[1300px] mx-auto px-4 sm:px-6 md:px-8 py-10 w-full min-h-screen font-sans">
       <div className="mb-6 border-b border-outline-variant/50 pb-4">
         <h1 className="font-display-lg text-xl sm:text-2xl md:text-3xl text-on-surface mb-2 flex items-center gap-2 truncate">
-          <ViconicIcon name="update" size={24} className="text-primary shrink-0" />
-          Mới cập nhật
+          <ViconicIcon name="check_circle" size={24} className="text-primary shrink-0" />
+          Truyện Hoàn Thành
         </h1>
         <p className="font-body-ui text-on-surface-variant text-sm">
-          Luôn dẫn đầu xu hướng với những chương truyện mới nhất được cập nhật liên tục mỗi phút.
+          Tổng hợp những bộ truyện đã dịch hoàn thành trọn bộ, đọc liền mạch cực đã không lo bị đứt quãng.
         </p>
       </div>
 
@@ -221,15 +222,15 @@ const NewUpdatePage: React.FC = () => {
           )}
         </div>
 
-        <span className="text-xs text-on-surface-variant ml-auto">
+        <span className="text-xs text-on-surface-variant ml-auto font-medium">
           {filteredSorted.length} truyện
         </span>
       </div>
 
       {filteredSorted.length === 0 ? (
         <div className="text-center py-20 border border-dashed border-outline-variant/50 rounded-sm bg-surface">
-          <ViconicIcon name="update" size={48} className="text-outline-variant mx-auto mb-4 block shrink-0" />
-          <p className="text-on-surface-variant font-medium">Không có truyện nào phù hợp.</p>
+          <ViconicIcon name="check_circle" size={48} className="text-outline-variant mx-auto mb-4 block shrink-0" />
+          <p className="text-on-surface-variant font-medium">Chưa có truyện nào hoàn thành.</p>
         </div>
       ) : (
         <>
@@ -260,4 +261,4 @@ const NewUpdatePage: React.FC = () => {
   );
 };
 
-export default NewUpdatePage;
+export default CompletedNovelsPage;

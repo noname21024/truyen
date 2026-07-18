@@ -71,8 +71,8 @@ const Header: React.FC = () => {
           const saved = localStorage.getItem('user');
           if (saved) {
             const u = JSON.parse(saved);
-            if (u.coin_balance !== data.coin_balance || u.is_vip !== data.is_vip) {
-              const updated = { ...u, coin_balance: data.coin_balance, is_vip: data.is_vip };
+            if (u.coin_balance !== data.coin_balance || u.is_vip !== data.is_vip || u.is_staff !== data.is_staff) {
+              const updated = { ...u, coin_balance: data.coin_balance, is_vip: data.is_vip, is_staff: data.is_staff };
               localStorage.setItem('user', JSON.stringify(updated));
               setUser(updated);
             }
@@ -106,21 +106,21 @@ const Header: React.FC = () => {
     return Array.from(genreSet).sort();
   }, []);
 
-  const [genres, setGenres] = useState<string[]>([]);
+  const [genres, setGenres] = useState<Array<{ id?: number; name: string }>>([]);
 
   // Fetch categories from backend API
   useEffect(() => {
     CategoryService.getCategories()
       .then(data => {
         if (data && data.length > 0) {
-          setGenres(data.map(c => c.name).sort((a, b) => a.localeCompare(b)));
+          setGenres(data.map(c => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name)));
         } else {
-          setGenres(staticGenres);
+          setGenres(staticGenres.map(name => ({ name })));
         }
       })
       .catch(err => {
         console.warn("Failed to load header categories from API, using static fallback:", err);
-        setGenres(staticGenres);
+        setGenres(staticGenres.map(name => ({ name })));
       });
   }, [staticGenres]);
 
@@ -128,15 +128,16 @@ const Header: React.FC = () => {
   const [allNovels, setAllNovels] = useState<any[]>([]);
 
   useEffect(() => {
+    let cancelled = false;
     NovelService.getNovels()
       .then(data => {
-        if (data) {
-          setAllNovels(data);
-        }
+        if (cancelled) return;
+        if (data) setAllNovels(data);
       })
       .catch(err => {
-        console.warn("Failed to load autocomplete novels list", err);
+        if (!cancelled) console.warn("Failed to load autocomplete novels list", err);
       });
+    return () => { cancelled = true; };
   }, []);
 
   // Diacritic-insensitive matching function
@@ -161,7 +162,7 @@ const Header: React.FC = () => {
       })
       .slice(0, 5)
       .map(dbNovel => ({
-        id: dbNovel.slug,
+        id: dbNovel.id,
         title: dbNovel.title,
         author: dbNovel.author || "Đang cập nhật",
         cover: dbNovel.cover_url || "https://placehold.co/40x56/e2e8f0/64748b?text=?",
@@ -217,8 +218,8 @@ const Header: React.FC = () => {
   return (
     <header className="sticky top-0 z-50 w-full">
       <div className="bg-white/70 backdrop-blur-lg border-b border-primary-container/50 shadow-sm shadow-primary-container/20">
-        <div className="flex justify-between items-center px-8 h-16 max-w-[1300px] mx-auto gap-4">
-          <div className="flex items-center gap-8 min-w-0">
+        <div className="flex justify-between items-center px-4 sm:px-6 lg:px-8 h-16 max-w-[1300px] mx-auto gap-4">
+          <div className="flex items-center gap-4 lg:gap-6 xl:gap-8 min-w-0">
         {/* Brand */}
         <Link 
           className="flex items-center gap-1.5 truncate min-w-0 hover:opacity-90 transition-opacity" 
@@ -232,7 +233,7 @@ const Header: React.FC = () => {
         </Link>
 
         {/* Navigation Links */}
-        <nav className="hidden md:flex items-center space-x-8 font-label-bold text-label-bold">
+        <nav className="hidden md:flex items-center space-x-4 lg:space-x-6 xl:space-x-8 font-label-bold text-label-bold">
           <Link 
             className={`${location.pathname === '/' ? 'text-primary border-b-2 border-primary pb-1' : 'text-on-surface-variant hover:text-primary transition-colors'}`} 
             to="/"
@@ -242,10 +243,10 @@ const Header: React.FC = () => {
           
           {/* Dropdown Thể Loại — Mega Dropdown */}
           <div className="relative group">
-            <button className="text-on-surface-variant hover:text-primary transition-colors flex items-center gap-1 py-1">
+            <Link to="/genres" className="text-on-surface-variant hover:text-primary transition-colors flex items-center gap-1 py-1">
               Thể loại
               <ViconicIcon name="keyboard_arrow_down" size={14} className="shrink-0" />
-            </button>
+            </Link>
             <div className="absolute top-full left-1/2 -translate-x-[25%] mt-2 w-[560px] bg-white border border-outline-variant/50 rounded-sm shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 p-4">
               <div className="mb-3 pb-1.5 border-b border-outline-variant/30 flex justify-between items-center">
                 <span className="font-bold text-xs text-primary flex items-center gap-1.5 uppercase tracking-wider">
@@ -257,13 +258,13 @@ const Header: React.FC = () => {
                 </Link>
               </div>
               <div className="grid grid-cols-4 gap-x-2 gap-y-1.5 max-h-[300px] overflow-y-auto pr-1">
-                {genres.map((name) => (
-                  <Link 
-                    key={name}
-                    to={`/genres/${encodeURIComponent(name)}`} 
+                {genres.map((g) => (
+                  <Link
+                    key={g.name}
+                    to={g.id ? `/genres/${g.id}` : `/genres/${encodeURIComponent(g.name)}`}
                     className="px-2 py-1 text-xs text-on-surface-variant hover:bg-primary/5 hover:text-primary transition-colors rounded-sm truncate font-medium"
                   >
-                    {name}
+                    {g.name}
                   </Link>
                 ))}
               </div>
@@ -299,7 +300,7 @@ const Header: React.FC = () => {
                 onChange={(e) => { setSearchQuery(e.target.value); setIsSearchOpen(true); }}
                 onFocus={() => setIsSearchOpen(true)}
                 placeholder="Tìm kiếm truyện..." 
-                className="bg-surface-variant/30 text-on-surface text-sm rounded-sm pl-10 pr-4 py-2 border border-outline-variant/50 focus:outline-none w-64 font-body-ui"
+                className="bg-surface-variant/30 text-on-surface text-sm rounded-sm pl-10 pr-4 py-2 border border-outline-variant/50 focus:outline-none w-48 lg:w-56 xl:w-64 font-body-ui"
               />
             </form>
 
@@ -707,15 +708,15 @@ const Header: React.FC = () => {
             <div>
               <p className="text-xs font-bold text-outline uppercase tracking-wider mb-3 px-3">Thể loại</p>
               <div className="grid grid-cols-2 gap-2">
-                {genres.map((name) => (
-                  <Link 
-                    key={name}
-                    to={`/genres/${encodeURIComponent(name)}`} 
+                {genres.map((g) => (
+                  <Link
+                    key={g.name}
+                    to={g.id ? `/genres/${g.id}` : `/genres/${encodeURIComponent(g.name)}`}
                     className="px-3 py-2 text-sm text-on-surface-variant hover:bg-surface-variant hover:text-primary transition-colors rounded-sm flex items-center gap-1.5"
                     onClick={() => setIsMenuOpen(false)}
                   >
                     <span className="w-1.5 h-1.5 rounded-full bg-primary/40 shrink-0"></span>
-                    <span className="truncate">{name}</span>
+                    <span className="truncate">{g.name}</span>
                   </Link>
                 ))}
               </div>
@@ -825,8 +826,8 @@ const Header: React.FC = () => {
       <Dialog open={isLoginDialogOpen} onOpenChange={setIsLoginDialogOpen}>
         <DialogContent className="sm:max-w-[360px] p-6 rounded-2xl border border-outline-variant/30 bg-white/95 backdrop-blur-md shadow-2xl animate-in fade-in duration-200">
           <DialogHeader className="flex flex-col items-center text-center space-y-2">
-            <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mb-1 text-primary">
-              <ViconicIcon name="star_shine" size={24} />
+            <div className="w-16 h-16 bg-gradient-to-br from-primary/10 to-primary/20 rounded-2xl flex items-center justify-center mb-2 shadow-sm border border-primary/10 transition-transform hover:scale-105 duration-300">
+              <img src="/logo.svg" alt="Pub Nih Truyện Logo" className="w-10 h-10 object-contain" />
             </div>
             <DialogTitle className="text-xl font-bold font-headline-md text-primary tracking-tight">
               Đăng nhập Pub Nih Truyện
