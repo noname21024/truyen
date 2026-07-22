@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://api.pubnihtruyen.com/api/';
 
 // Client-side TTL cache — prevents redundant API calls when navigating between pages
 const _memCache = new Map<string, { data: unknown; exp: number }>();
@@ -38,6 +38,63 @@ api.interceptors.request.use(config => {
   }
   return config;
 });
+
+// The account is limited to a fixed number of signed-in devices. When a newer
+// device pushes this one out, the server answers `session_revoked` — the stored
+// token is dead, so clear it and let the app show a message rather than letting
+// every subsequent call fail silently.
+api.interceptors.response.use(
+  response => response,
+  error => {
+    if (error?.response?.data?.code === 'session_revoked') {
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('user');
+      window.dispatchEvent(new CustomEvent('session-revoked'));
+    }
+    return Promise.reject(error);
+  }
+);
+
+export const AuthService = {
+  // Frees this device's slot server-side; without it the session lingers until
+  // it expires and keeps occupying one of the allowed devices.
+  logout: async () => {
+    try {
+      await api.post('auth/logout/');
+    } catch {
+      // Already invalid server-side — clearing local state below is enough.
+    }
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('user');
+  },
+
+  updateName: async (name: string) => {
+    const r = await api.patch<{ name: string }>('auth/profile/', { name });
+    return r.data;
+  },
+
+  uploadAvatar: async (file: File) => {
+    const form = new FormData();
+    form.append('avatar', file);
+    // Let the browser set the multipart boundary itself.
+    const r = await api.post<{ avatar_url: string }>('auth/avatar/', form, {
+      headers: { 'Content-Type': undefined as unknown as string },
+    });
+    return r.data;
+  },
+
+  resetAvatar: async () => {
+    const r = await api.post<{ avatar_url: string }>('auth/avatar/reset/');
+    return r.data;
+  },
+
+  getSessions: async () => {
+    const r = await api.get<{
+      id: number; device: string; last_seen_at: string; created_at: string; is_current: boolean;
+    }[]>('auth/sessions/');
+    return r.data;
+  },
+};
 
 // Public API instance — no Authorization header so Cloudflare CDN can cache responses
 // for logged-in users too (free plan doesn't support "Ignore Authorization header" rule)
@@ -101,6 +158,8 @@ export interface NovelSummary {
   total_chapters: number;
   view_count: number;
   follow_count: number;
+  /** Story comments plus comments on all of its chapters. */
+  comment_count: number;
   updated_at: string;
   description?: string;
 }
@@ -134,6 +193,7 @@ export interface NovelDetail {
   total_chapters: number;
   view_count: number;
   follow_count: number;
+  comment_count: number;
   rating_avg: number;
   rating_count: number;
   created_at: string;
@@ -296,6 +356,10 @@ export interface StoryPriceInfo {
   already_unlocked: number;
   locked_count: number;
   cost_per_chapter: number;
+  /** Price before the bulk discount — shown struck through next to total_cost. */
+  original_cost: number;
+  discount_percent: number;
+  saved: number;
   total_cost: number;
   free_up_to: number;
 }
@@ -367,6 +431,8 @@ export interface StoryCommentData {
   user_is_staff?: boolean;
   content: string;
   parent: number | null;
+  like_count: number;
+  liked_by_me: boolean;
   created_at: string;
 }
 
@@ -383,6 +449,8 @@ export interface ChapterCommentData {
   user_is_staff?: boolean;
   content: string;
   parent: number | null;
+  like_count: number;
+  liked_by_me: boolean;
   created_at: string;
 }
 
@@ -462,12 +530,29 @@ interface PaginatedResponse<T> {
   results: T[];
 }
 
+// Comment listings carry a per-user `liked_by_me` flag, so a logged-in reader
+// must send their token — publicApi strips it and the server would report every
+// comment as un-liked.
+function commentApi() {
+  return localStorage.getItem('auth_token') ? api : publicApi;
+}
+
 export const CommentService = {
   getStoryComments: async (storySlug: string): Promise<StoryCommentData[]> => {
-    const r = await publicApi.get<PaginatedResponse<StoryCommentData> | StoryCommentData[]>('story-comments/', {
+    const r = await commentApi().get<PaginatedResponse<StoryCommentData> | StoryCommentData[]>('story-comments/', {
       params: { story_slug: storySlug, page_size: 100 },
     });
     return Array.isArray(r.data) ? r.data : r.data.results;
+  },
+
+  toggleStoryCommentLike: async (commentId: number): Promise<{ liked: boolean; like_count: number }> => {
+    const r = await api.post(`story-comments/${commentId}/toggle-like/`);
+    return r.data;
+  },
+
+  toggleChapterCommentLike: async (commentId: number): Promise<{ liked: boolean; like_count: number }> => {
+    const r = await api.post(`chapter-comments/${commentId}/toggle-like/`);
+    return r.data;
   },
 
   getRecentComments: async (limit = 50): Promise<StoryCommentData[]> => {
@@ -496,21 +581,21 @@ export const CommentService = {
   },
 
   getRecentChapterComments: async (limit = 50): Promise<ChapterCommentData[]> => {
-    const r = await publicApi.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
+    const r = await commentApi().get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
       params: { page_size: limit },
     });
     return Array.isArray(r.data) ? r.data : r.data.results;
   },
 
   getChapterComments: async (chapterId: number): Promise<ChapterCommentData[]> => {
-    const r = await publicApi.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
+    const r = await commentApi().get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
       params: { chapter_id: chapterId, page_size: 100 },
     });
     return Array.isArray(r.data) ? r.data : r.data.results;
   },
 
   getChapterCommentsByStory: async (storySlug: string): Promise<ChapterCommentData[]> => {
-    const r = await publicApi.get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
+    const r = await commentApi().get<PaginatedResponse<ChapterCommentData> | ChapterCommentData[]>('chapter-comments/', {
       params: { story_slug: storySlug, page_size: 100 },
     });
     return Array.isArray(r.data) ? r.data : r.data.results;
@@ -593,9 +678,42 @@ export const DonationService = {
 };
 
 export const StoryFollowService = {
-  toggle: async (storySlug: string): Promise<{ following: boolean; follow_count: number }> => {
-    const r = await api.post('story-follows/toggle/', { story_slug: storySlug });
+  // Accepts a slug or a numeric id — story cards only have the latter.
+  toggle: async (story: string | number): Promise<{ following: boolean; follow_count: number }> => {
+    const payload = typeof story === 'number' ? { story_id: story } : { story_slug: story };
+    const r = await api.post('story-follows/toggle/', payload);
     return r.data;
+  },
+
+  // Story ids the current user follows. The server is the source of truth —
+  // the old localStorage scheme keyed entries by display name, so renaming
+  // yourself orphaned every entry and the shelf looked empty.
+  getMyFollows: async (): Promise<number[]> => {
+    const r = await api.get<PaginatedResponse<{ story: number }> | { story: number }[]>(
+      'story-follows/', { params: { page_size: 200 } }
+    );
+    const list = Array.isArray(r.data) ? r.data : r.data.results;
+    const ids = list.map(f => f.story);
+
+    // Story cards read their bookmark state from these keys, so refresh them
+    // from the server — otherwise a story followed on another device shows an
+    // empty bookmark here until it's toggled again.
+    //
+    // Deliberately does NOT dispatch followed-novels-updated: the followed
+    // columns call this from their own event listener, so re-firing here would
+    // loop them straight back into another fetch.
+    try {
+      const user = JSON.parse(localStorage.getItem('user') || 'null');
+      if (user?.id) {
+        const prefix = 'follow_novel_';
+        const suffix = `_user_${user.id}`;
+        for (const key of Object.keys(localStorage)) {
+          if (key.startsWith(prefix) && key.endsWith(suffix)) localStorage.removeItem(key);
+        }
+        for (const id of ids) localStorage.setItem(`${prefix}${id}${suffix}`, '1');
+      }
+    } catch {}
+    return ids;
   },
 
   // Returns whether the logged-in user already follows this story (scoped server-side to the current user)
@@ -603,6 +721,38 @@ export const StoryFollowService = {
     const r = await api.get<PaginatedResponse<{ id: number }> | { id: number }[]>('story-follows/', { params: { story_slug: storySlug } });
     const list = Array.isArray(r.data) ? r.data : r.data.results;
     return list.length > 0;
+  },
+};
+
+export const ErrorReportService = {
+  submit: async (chapterId: number, errorName: string, errorMessage: string) => {
+    const r = await api.post('chapter-error-reports/', {
+      chapter: chapterId,
+      error_name: errorName,
+      error_message: errorMessage,
+    });
+    return r.data;
+  },
+};
+
+export interface ReadingProgressEntry {
+  id: number;
+  story: number;
+  last_chapter: number;
+  updated_at: string;
+}
+
+export const ReadingProgressService = {
+  getAll: async (): Promise<ReadingProgressEntry[]> => {
+    const r = await api.get<PaginatedResponse<ReadingProgressEntry> | ReadingProgressEntry[]>(
+      'reading-progress/', { params: { page_size: 200 } }
+    );
+    return Array.isArray(r.data) ? r.data : r.data.results;
+  },
+
+  // Upserts server-side: one row per story, one request per chapter read.
+  save: async (storyId: number, chapterId: number) => {
+    await api.post('reading-progress/upsert/', { story: storyId, last_chapter: chapterId });
   },
 };
 
