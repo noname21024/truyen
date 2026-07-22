@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://api.pubnihtruyen.com/api/';
+const _rawApiUrl = (import.meta.env.VITE_API_BASE_URL || 'https://api.pubnihtruyen.com/api').trim();
+export const API_BASE_URL = _rawApiUrl.replace(/\/+$/, '');
 
 // Client-side TTL cache — prevents redundant API calls when navigating between pages
 const _memCache = new Map<string, { data: unknown; exp: number }>();
