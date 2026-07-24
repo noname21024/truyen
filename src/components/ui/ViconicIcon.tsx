@@ -68,6 +68,17 @@ const ICON_MAP: Record<string, LucideIcon | React.ComponentType<any>> = {
   home: Lucide.Home,
   info: Lucide.Info,
   keyboard_arrow_down: Lucide.ChevronDown,
+  // Material-Symbols names with no Lucide equivalent to fall back on — without
+  // an entry here they silently render as the HelpCircle placeholder.
+  keyboard_arrow_up: Lucide.ChevronUp,
+  expand_less: Lucide.ChevronUp,
+  expand_more: Lucide.ChevronDown,
+  arrow_downward: Lucide.ArrowDown,
+  content_copy: Lucide.Copy,
+  help_outline: Lucide.HelpCircle,
+  warning_amber: Lucide.AlertTriangle,
+  lock_outline: Lucide.Lock,
+  reply_comment: Lucide.Reply,
   local_fire_department: Lucide.Flame,
   lock: Lucide.Lock,
   lock_open: Lucide.LockOpen,

@@ -1,3 +1,13 @@
+/**
+ * Opens the real sign-in dialog, which lives in the Header.
+ *
+ * Pages elsewhere in the tree can't reach that state directly, so they ask for
+ * it through a window event rather than each rolling their own login UI.
+ */
+export const showLoginDialog = () => {
+  window.dispatchEvent(new CustomEvent('open-login-dialog'));
+};
+
 export interface CustomDialogOptions {
   title: string;
   message: string;

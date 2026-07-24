@@ -2,11 +2,12 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 import novelsDataJson from '@/data/novelsIndex.json';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { NovelService, ChapterService, CoinService, CommentService, API_BASE_URL } from '@/lib/api';
+import { NovelService, ChapterService, CoinService, CommentService, StoryFollowService, ErrorReportService, ReadingProgressService, API_BASE_URL } from '@/lib/api';
 import { isUserVIP } from '@/lib/user';
-import { showToast, showCustomConfirm } from '@/lib/dialog';
+import { showToast, showCustomConfirm, showLoginDialog } from '@/lib/dialog';
 import { useAudioPlayer } from '@/contexts/AudioPlayerContext';
 import { STICKER_SETS } from '@/data/stickers';
+import { renderCommentContentHtml } from '@/lib/comments';
 
 const novelsData = novelsDataJson as any[];
 
@@ -80,17 +81,6 @@ interface Comment {
   isStaff?: boolean;
   replies?: Reply[];
 }
-
-const renderCommentContentHtml = (text: string): string => {
-  if (!text) return '';
-  return text.replace(/\[sticker:([a-zA-Z0-9_-]+):([a-zA-Z0-9_.-]+)\]/g, (match, setId, filename) => {
-    const set = STICKER_SETS.find(s => s.id === setId);
-    if (set) {
-      return `<img src="${set.baseUrl}${filename}" alt="sticker" class="w-12 h-12 inline-block align-middle my-0.5 mx-1 max-h-12 object-contain select-none animate-in zoom-in-50 duration-150" />`;
-    }
-    return match;
-  });
-};
 
 
 type TocEntry = { id: number; chapter_number: number; title: string };
@@ -223,28 +213,53 @@ const ChapterPage: React.FC = () => {
     } catch {}
   }, [currentUser]);
 
-  // Load/persist follow status for this novel
+  // Load follow status — localStorage first for an instant paint, then reconcile
+  // with the server, which is the actual source of truth (DetailPage does the same).
   useEffect(() => {
-    if (storySlug && currentUser) {
-      setIsFollowed(!!localStorage.getItem(`follow_novel_${storySlug}_user_${currentUser.name}`));
-    } else {
+    if (!storySlug || !currentUser) {
       setIsFollowed(false);
+      return;
     }
+    const cacheKey = `follow_novel_${storySlug}_user_${currentUser.id}`;
+    setIsFollowed(!!localStorage.getItem(cacheKey));
+    let cancelled = false;
+    StoryFollowService.checkFollowing(storySlug)
+      .then(following => {
+        if (cancelled) return;
+        setIsFollowed(following);
+        if (following) localStorage.setItem(cacheKey, '1');
+        else localStorage.removeItem(cacheKey);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, [storySlug, currentUser]);
 
-  const handleFollowToggle = () => {
+  const handleFollowToggle = async () => {
     if (!currentUser) {
       showToast('Vui lòng đăng nhập tài khoản để theo dõi truyện!');
       return;
     }
+    if (!storySlug) return;
+    const cacheKey = `follow_novel_${storySlug}_user_${currentUser.id}`;
     const nextState = !isFollowed;
     setIsFollowed(nextState);
-    if (nextState) {
-      localStorage.setItem(`follow_novel_${storySlug}_user_${currentUser.name}`, '1');
-      showToast('Đã thêm bộ truyện vào tủ sách theo dõi!');
-    } else {
-      localStorage.removeItem(`follow_novel_${storySlug}_user_${currentUser.name}`);
-      showToast('Đã hủy theo dõi bộ truyện.');
+    try {
+      // Persist server-side, otherwise the follow only lives in this browser and
+      // DetailPage's server check would wipe it on the next visit.
+      const result = await StoryFollowService.toggle(storySlug);
+      setIsFollowed(result.following);
+      if (result.following) {
+        localStorage.setItem(cacheKey, '1');
+        showToast('Đã thêm bộ truyện vào tủ sách theo dõi!');
+      } else {
+        localStorage.removeItem(cacheKey);
+        showToast('Đã hủy theo dõi bộ truyện.');
+      }
+      // Keeps the followed column on other pages in sync once the write lands.
+      window.dispatchEvent(new CustomEvent('followed-novels-updated'));
+    } catch {
+      setIsFollowed(!nextState);
+      showToast('Không thể cập nhật theo dõi. Vui lòng thử lại!');
     }
   };
 
@@ -323,34 +338,21 @@ const ChapterPage: React.FC = () => {
     setIsReportModalOpen(true);
   };
 
-  const handleReportSubmit = (e: React.FormEvent) => {
+  const handleReportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!reportErrorName.trim() || !reportErrorMessage.trim() || !currentUser) return;
+    if (!reportErrorName.trim() || !reportErrorMessage.trim() || !currentUser || !currentChapterId) return;
 
-    // Persist report to localStorage
-    const newReport = {
-      id: Date.now(),
-      novelId: storySlug,
-      chapterIndex: currentChapterNumber,
-      chapterTitle: chapterData?.title || `Chương ${currentChapterNumber}`,
-      user: currentUser.name,
-      errorName: reportErrorName.trim(),
-      errorMessage: reportErrorMessage.trim(),
-      timestamp: new Date().toISOString()
-    };
-
-    const savedReports = localStorage.getItem('error_reports');
-    let reportsList = [];
-    if (savedReports) {
-      try {
-        reportsList = JSON.parse(savedReports);
-      } catch (e) { }
+    try {
+      // This used to only append to localStorage while telling the reader the
+      // report had been sent, so no report ever reached anyone.
+      await ErrorReportService.submit(
+        currentChapterId, reportErrorName.trim(), reportErrorMessage.trim()
+      );
+      setIsReportModalOpen(false);
+      showToast('Đã gửi báo lỗi. Cảm ơn bạn đã đóng góp!');
+    } catch {
+      showToast('Gửi báo lỗi thất bại. Vui lòng thử lại!');
     }
-    reportsList.push(newReport);
-    localStorage.setItem('error_reports', JSON.stringify(reportsList));
-
-    alert("Báo cáo lỗi đã được gửi thành công! Cảm ơn sự đóng góp của bạn.");
-    setIsReportModalOpen(false);
   };
 
   const paragraphs = useMemo(() => {
@@ -408,16 +410,14 @@ const ChapterPage: React.FC = () => {
     if (!currentChapterId) return;
     CommentService.getChapterComments(currentChapterId)
       .then(data => {
-        const likedKey = `liked_chapter_comments_${currentChapterId}`;
-        const liked: number[] = JSON.parse(localStorage.getItem(likedKey) || '[]');
         const mapped: Comment[] = data.map(c => ({
           id: c.id,
           user: c.user_name || 'Ẩn danh',
           time: new Date(c.created_at).toLocaleDateString('vi-VN'),
           text: c.content,
-          likes: 0,
+          likes: c.like_count ?? 0,
           avatar: c.user_avatar || '',
-          likedByUser: liked.includes(c.id),
+          likedByUser: !!c.liked_by_me,
           isVip: !!c.user_is_vip,
           isStaff: !!c.user_is_staff,
           replies: [],
@@ -551,21 +551,32 @@ const ChapterPage: React.FC = () => {
     }
   };
 
-  const handleLikeComment = (commentId: number) => {
+  const handleLikeComment = async (commentId: number) => {
     if (!currentUser) {
       showToast("Vui lòng đăng nhập tài khoản để thích bình luận!");
       return;
     }
-    const likedKey = `liked_chapter_comments_${currentChapterId}`;
-    const liked: number[] = JSON.parse(localStorage.getItem(likedKey) || '[]');
-    const isLiked = liked.includes(commentId);
-    const updatedLiked = isLiked ? liked.filter(x => x !== commentId) : [...liked, commentId];
-    localStorage.setItem(likedKey, JSON.stringify(updatedLiked));
+    const target = comments.find(c => c.id === commentId);
+    if (!target) return;
+    const wasLiked = target.likedByUser;
+    const prevLikes = target.likes;
+    // Optimistic flip, reconciled with the server's authoritative count below
     setComments(prev => prev.map(c =>
       c.id === commentId
-        ? { ...c, likedByUser: !isLiked, likes: isLiked ? Math.max(0, c.likes - 1) : c.likes + 1 }
+        ? { ...c, likedByUser: !wasLiked, likes: wasLiked ? Math.max(0, c.likes - 1) : c.likes + 1 }
         : c
     ));
+    try {
+      const result = await CommentService.toggleChapterCommentLike(commentId);
+      setComments(prev => prev.map(c =>
+        c.id === commentId ? { ...c, likedByUser: result.liked, likes: result.like_count } : c
+      ));
+    } catch {
+      setComments(prev => prev.map(c =>
+        c.id === commentId ? { ...c, likedByUser: wasLiked, likes: prevLikes } : c
+      ));
+      showToast("Không thể cập nhật lượt thích. Vui lòng thử lại!");
+    }
   };
 
   const handleDeleteComment = (commentId: number, parentId?: number) => {
@@ -856,22 +867,25 @@ const ChapterPage: React.FC = () => {
 
   // Save viewed chapter to reading history list
   useEffect(() => {
-    if (!storySlug || !currentChapterNumber || !chapterData?.title) return;
+    // Wait for the story itself, otherwise the entry would be written with the
+    // slug standing in for the title until the fetch lands.
+    if (!storySlug || !currentChapterNumber || !chapterData?.title || !novel?.title) return;
     try {
-      const novelIdentifier = novel?.id ?? storySlug;
       const historyStr = localStorage.getItem('reading_history_list') || '[]';
       const history = JSON.parse(historyStr) as any[];
-      const filtered = history.filter((item: any) => item.novelId !== novelIdentifier);
 
-      let novelTitle = novel?.title;
-      if (!novelTitle) {
-        const staticNovel = novelsData.find((n: any) => n.id === storySlug);
-        novelTitle = staticNovel?.title || storySlug;
-      }
+      // Identity is the slug, which is known from the very first render. Keying
+      // on novel.id instead meant an entry got written under the slug before the
+      // story finished loading and a second one under the id afterwards, leaving
+      // the same story listed twice — once with the slug shown as its title.
+      const filtered = history.filter((item: any) =>
+        item.storySlug !== storySlug && item.novelId !== storySlug && item.novelId !== novel?.id
+      );
 
       const newItem = {
-        novelId: novelIdentifier,
-        novelTitle,
+        storySlug,
+        novelId: novel?.id ?? storySlug,
+        novelTitle: novel?.title || storySlug,
         chapterNumber: currentChapterNumber,
         chapterTitle: chapterData.title,
         timestamp: new Date().toISOString()
@@ -880,10 +894,29 @@ const ChapterPage: React.FC = () => {
       const updated = [newItem, ...filtered].slice(0, 30);
       localStorage.setItem('reading_history_list', JSON.stringify(updated));
       localStorage.setItem(`reading_progress_${storySlug}`, currentChapterNumber.toString());
+
+      // The "Lịch Sử Xem" widget reads this id list. Write it here — when a
+      // chapter is actually read — so opening a detail page alone never counts
+      // as history.
+      if (novel?.id) {
+        try {
+          const rawVh = JSON.parse(localStorage.getItem('viewing_history') || '[]');
+          const ids = (Array.isArray(rawVh) ? rawVh : [])
+            .map((x: unknown) => Number(x))
+            .filter((n: number) => !Number.isNaN(n) && n !== novel.id);
+          localStorage.setItem('viewing_history', JSON.stringify([novel.id, ...ids].slice(0, 15)));
+        } catch { /* ignore malformed local history */ }
+      }
+
+      // Mirror it to the server so "Đọc Tiếp" survives a different browser or
+      // a cleared cache. localStorage stays as the instant local copy.
+      if (currentUser && novel?.id && currentChapterId) {
+        ReadingProgressService.save(novel.id, currentChapterId).catch(() => {});
+      }
     } catch (e) {
       console.error("Failed to save reading history list:", e);
     }
-  }, [storySlug, currentChapterNumber, chapterData?.title, novel?.title, novel?.id]);
+  }, [storySlug, currentChapterNumber, chapterData?.title, novel?.title, novel?.id, currentChapterId, currentUser]);
 
   if (!novel && !loading && !novelLoading) {
     return (
@@ -1423,16 +1456,7 @@ const ChapterPage: React.FC = () => {
             <div className={`mb-8 border border-dashed ${currentTheme.border} p-5 rounded-sm text-center ${currentTheme.accentBg}`}>
               <p className="text-xs mb-3">Vui lòng đăng nhập tài khoản để tham gia gửi bình luận về chương này.</p>
               <button
-                onClick={() => {
-                  const mockUser = {
-                    name: "Độc Giả Pub Nih",
-                    avatar: "https://lh3.googleusercontent.com/aida-public/AB6AXuAb-14uOcA3z6oOYNNXFQZMGk5LqtQxM2cL7kShQ6UO4TvOht8YiLfBJY-3bihJuLgXze9CkbXBa6QFIw9VqTUHkpB50TncEOMChL_WpiVyFICNRCgDJc9ARVe1kNnxXUnO8MK2up2wRutKKiFBjnuceM8exGI8iRAvDvvXidxorqEi32E5PB2o9k-EKsrzj1ffNHQkPDA5LxhyYhJbSWfwvAlEKTTvNwgrsUxFkPJ1FnXVSIeWsLB4K3mNSVpSarNi49k0D31ynmtw"
-                  };
-                  localStorage.setItem('user', JSON.stringify(mockUser));
-                  setCurrentUser(mockUser);
-                  alert("Đăng nhập thành công (Demo)!");
-                  window.location.reload();
-                }}
+                onClick={showLoginDialog}
                 className="bg-primary text-on-primary font-bold text-xs py-2 px-5 rounded-sm hover:bg-primary/95 transition-colors inline-flex items-center gap-1.5 active:scale-95"
               >
                 <ViconicIcon name="login" size={12} className="shrink-0" />
@@ -1646,10 +1670,15 @@ const ChapterPage: React.FC = () => {
                       className={`flex items-center gap-1 transition-colors group ${comment.likedByUser ? 'text-primary' : 'opacity-70 hover:opacity-100 hover:text-primary'
                         }`}
                     >
+                      {/* Solid heart once liked — see the matching button on DetailPage */}
                       <ViconicIcon
                         name="favorite"
                         size={14}
-                        className={`shrink-0 ${comment.likedByUser ? 'text-primary scale-110' : 'group-hover:scale-110'} transition-transform duration-200`}
+                        className={`shrink-0 transition-transform duration-200 ${
+                          comment.likedByUser
+                            ? 'text-primary fill-primary scale-110'
+                            : 'fill-none group-hover:scale-110'
+                        }`}
                       />
                       <span className="font-bold text-[10px]">{comment.likes}</span>
                     </button>

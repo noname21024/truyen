@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import novelsDataJson from '@/data/novelsIndex.json';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { api, CategoryService, NovelService, CoinService, NotificationService, type NotificationData } from '@/lib/api';
+import { api, AuthService, CategoryService, NovelService, CoinService, NotificationService, type NotificationData } from '@/lib/api';
 import { showCustomAlert, showCustomConfirm } from '@/lib/dialog';
 import { isUserVIP } from '@/lib/user';
 import {
@@ -40,17 +40,22 @@ const Header: React.FC = () => {
       try { setUser(JSON.parse(saved)); } catch (e) {}
     }
     const openLogin = () => setIsLoginDialogOpen(true);
-    const handleBalanceUpdate = () => {
+    // Re-reads the stored reader after anything changes it — a coin top-up, or
+    // a new display name / avatar saved on the profile page. Without this the
+    // header keeps showing the old value until a full page reload.
+    const handleUserChanged = () => {
       const latest = localStorage.getItem('user');
       if (latest) {
         try { setUser(JSON.parse(latest)); } catch (e) {}
       }
     };
     window.addEventListener('open-login-dialog', openLogin);
-    window.addEventListener('balance-updated', handleBalanceUpdate);
+    window.addEventListener('balance-updated', handleUserChanged);
+    window.addEventListener('user-updated', handleUserChanged);
     return () => {
       window.removeEventListener('open-login-dialog', openLogin);
-      window.removeEventListener('balance-updated', handleBalanceUpdate);
+      window.removeEventListener('balance-updated', handleUserChanged);
+      window.removeEventListener('user-updated', handleUserChanged);
     };
   }, []);
 
@@ -94,7 +99,13 @@ const Header: React.FC = () => {
   };
 
   const loginWithFacebook = () => {
-    alert('Đăng nhập bằng Facebook chưa được hỗ trợ.');
+    setIsLoginDialogOpen(false);
+    showCustomAlert(
+      'Chưa hỗ trợ',
+      'Đăng nhập bằng Facebook hiện chưa được hỗ trợ. Vui lòng dùng tài khoản Google để tiếp tục.',
+      undefined,
+      'hum:info'
+    );
   };
 
   // Extract unique genres from data as fallback
@@ -373,7 +384,7 @@ const Header: React.FC = () => {
               </button>
 
               {isNotifOpen && (
-                <div className="absolute right-0 mt-2.5 w-96 bg-surface border border-outline-variant/50 rounded-sm shadow-xl z-50 flex flex-col animate-in fade-in slide-in-from-top-2 duration-150" style={{ maxHeight: '520px' }}>
+                <div className="fixed sm:absolute top-14 sm:top-full left-2 right-2 sm:left-auto sm:right-0 mt-2.5 w-auto sm:w-96 max-w-[calc(100vw-1rem)] bg-surface border border-outline-variant/50 rounded-sm shadow-xl z-50 flex flex-col animate-in fade-in slide-in-from-top-2 duration-150" style={{ maxHeight: '520px' }}>
                   {/* Header sticky */}
                   <div className="px-4 py-3 border-b border-outline-variant/30 flex justify-between items-center shrink-0 bg-surface">
                     <span className="font-bold text-sm text-on-surface flex items-center gap-1.5">
@@ -600,9 +611,11 @@ const Header: React.FC = () => {
                       showCustomConfirm(
                         'Đăng xuất',
                         'Bạn có chắc chắn muốn đăng xuất tài khoản hiện tại không?',
-                        () => {
-                          localStorage.removeItem('user');
-                          localStorage.removeItem('auth_token');
+                        async () => {
+                          // Releases this device's slot server-side as well as
+                          // clearing local state, so it stops counting towards
+                          // the account's device limit right away.
+                          await AuthService.logout();
                           setUser(null);
                           showCustomAlert('Thành công', 'Đã đăng xuất tài khoản!', () => {
                             window.location.reload();

@@ -259,7 +259,11 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       
       <Header />
 
-      <main className={`flex-grow ${track ? 'pb-16' : ''}`}>
+      {/* The audio mini-player is fixed at the bottom, so pages need bottom room
+          to keep their last content from hiding behind it — except ChapterPage,
+          which already reserves its own pb-20, so adding pb-16 here just left a
+          dead gap under the chapter. */}
+      <main className={`flex-grow ${track && !isChapterPage ? 'pb-16' : ''}`}>
         {children}
       </main>
 
@@ -341,8 +345,8 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                   if (currentUserStr) {
                     try {
                       const currentUser = JSON.parse(currentUserStr);
-                      const isFollowedById = localStorage.getItem(`follow_novel_${hoveredNovel.id}_user_${currentUser.name}`) === '1';
-                      const isFollowedBySlug = localStorage.getItem(`follow_novel_${hoveredNovel.slug}_user_${currentUser.name}`) === '1';
+                      const isFollowedById = localStorage.getItem(`follow_novel_${hoveredNovel.id}_user_${currentUser.id}`) === '1';
+                      const isFollowedBySlug = localStorage.getItem(`follow_novel_${hoveredNovel.slug}_user_${currentUser.id}`) === '1';
                       if (isFollowedById || isFollowedBySlug) {
                         count += 1;
                       }

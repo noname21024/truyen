@@ -741,6 +741,11 @@ export interface ReadingProgressEntry {
   story: number;
   last_chapter: number;
   updated_at: string;
+  last_chapter_number: number;
+  last_chapter_title: string;
+  story_title: string;
+  story_slug: string;
+  story_cover: string;
 }
 
 export const ReadingProgressService = {
@@ -754,6 +759,54 @@ export const ReadingProgressService = {
   // Upserts server-side: one row per story, one request per chapter read.
   save: async (storyId: number, chapterId: number) => {
     await api.post('reading-progress/upsert/', { story: storyId, last_chapter: chapterId });
+  },
+
+  // Story ids for the "Lịch Sử Xem" widget, most-recently-read first.
+  //
+  // The server rows (one per story the reader has actually opened a chapter of)
+  // are the durable source — they survive a cleared cache or a brand-new device
+  // because they're tied to the account, not the browser. The local
+  // `viewing_history` is only a fallback: it covers logged-out readers and
+  // stories opened on the detail page but not yet read. We merge server first,
+  // then any local-only ids, and write the result back so the list is instantly
+  // there (and re-hydrated) on the next load.
+  getHistoryStoryIds: async (): Promise<number[]> => {
+    const readLocal = (): number[] => {
+      try {
+        const raw = JSON.parse(localStorage.getItem('viewing_history') || '[]');
+        return (Array.isArray(raw) ? raw : [])
+          .map((x: unknown) => Number(x))
+          .filter((n: number) => !Number.isNaN(n));
+      } catch { return []; }
+    };
+
+    if (!localStorage.getItem('auth_token')) return readLocal().slice(0, 15);
+
+    try {
+      const progress = await ReadingProgressService.getAll();
+      const sorted = progress
+        .slice()
+        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+      const serverIds = sorted.map(p => p.story).slice(0, 15);
+      // Hydrate the per-story badge cache (keyed by story id, matching how the
+      // sidebar reads it) from the server's chapter number — so "Đang đọc: C…"
+      // is right even after a cleared cache, on a new device, or when the local
+      // copy was written under the slug instead of the id.
+      for (const p of sorted) {
+        if (p.last_chapter_number) {
+          localStorage.setItem(`reading_progress_${p.story}`, String(p.last_chapter_number));
+        }
+      }
+      // For a signed-in reader the server is authoritative: reading a chapter
+      // always upserts progress there. We deliberately do NOT fold in local-only
+      // ids, so stories that were merely opened on the detail page (under the old
+      // behavior, still lingering in localStorage) don't resurface. Mirror the
+      // result locally for an instant render on the next load.
+      localStorage.setItem('viewing_history', JSON.stringify(serverIds));
+      return serverIds;
+    } catch {
+      return readLocal().slice(0, 15);
+    }
   },
 };
 

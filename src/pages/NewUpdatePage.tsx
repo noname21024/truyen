@@ -1,18 +1,20 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import UpdateCard from '@/components/cards/UpdateCard';
+import NovelCard from '@/components/cards/NovelCard';
 import ViconicIcon from '@/components/ui/ViconicIcon';
 import SimplePagination from '@/components/ui/SimplePagination';
 import { CategoryService, NovelService } from '@/lib/api';
 
-type SortOption = 'newest' | 'chapters' | 'views';
+type SortOption = 'newest' | 'chapters' | 'views' | 'follows' | 'comments';
 
 const SORT_LABELS: Record<SortOption, string> = {
   newest: 'Mới cập nhật',
   chapters: 'Nhiều chương nhất',
   views: 'Nhiều lượt xem nhất',
+  follows: 'Nhiều theo dõi nhất',
+  comments: 'Nhiều bình luận nhất',
 };
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 24;
 
 const NewUpdatePage: React.FC = () => {
   const [novels, setNovels] = useState<any[]>([]);
@@ -39,11 +41,17 @@ const NewUpdatePage: React.FC = () => {
           const mapped = data.map(dbNovel => ({
             id: dbNovel.id,
             title: dbNovel.title,
+            author: dbNovel.author || "Đang cập nhật",
+            status: dbNovel.status === 'COMPLETED' ? 'Hoàn thành' : 'Đang ra',
+            color: dbNovel.status === 'COMPLETED' ? 'bg-blue-500/10 text-blue-500 border border-blue-500/20' : 'bg-green-100 text-green-700 border-green-200',
             chapter_count: dbNovel.total_chapters || 0,
             cover: dbNovel.cover_url || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
-            tags: dbNovel.genres.map((g: any) => g.name),
+            tags: (dbNovel.genres || []).map((g: any) => g.name),
             views: dbNovel.view_count || 0,
+            follows: dbNovel.follow_count || 0,
+            comments: dbNovel.comment_count || 0,
             updated_at: dbNovel.updated_at,
+            is_vip: dbNovel.is_vip,
           }));
           setNovels(mapped);
         }
@@ -69,36 +77,6 @@ const NewUpdatePage: React.FC = () => {
   // Reset to page 1 whenever sort/filter changes
   useEffect(() => { setPage(1); }, [sortBy, genreFilter]);
 
-  // Helper to format relative time
-  const formatRelativeTime = (dateStr: string): string => {
-    const now = new Date();
-    const date = new Date(dateStr);
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / (1000 * 60));
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-
-    if (diffMins < 1) return 'Vừa xong';
-    if (diffMins < 60) return `${diffMins} phút trước`;
-    if (diffHours < 24) {
-      if (date.getDate() === now.getDate()) {
-        return `${diffHours} giờ trước`;
-      }
-    }
-
-    const yesterday = new Date();
-    yesterday.setDate(now.getDate() - 1);
-    if (date.getDate() === yesterday.getDate() &&
-        date.getMonth() === yesterday.getMonth() &&
-        date.getFullYear() === yesterday.getFullYear()) {
-      return 'Hôm qua';
-    }
-
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
-  };
-
   const filteredSorted = useMemo(() => {
     let result = genreFilter === 'all'
       ? novels
@@ -111,6 +89,12 @@ const NewUpdatePage: React.FC = () => {
         break;
       case 'views':
         result.sort((a, b) => (b.views || 0) - (a.views || 0));
+        break;
+      case 'follows':
+        result.sort((a, b) => (b.follows || 0) - (a.follows || 0));
+        break;
+      case 'comments':
+        result.sort((a, b) => (b.comments || 0) - (a.comments || 0));
         break;
       default:
         result.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
@@ -129,20 +113,13 @@ const NewUpdatePage: React.FC = () => {
           <div className="h-4 bg-outline-variant/30 rounded w-96" />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 animate-pulse">
-          {[1, 2, 3].map(n => (
-            <div key={n} className="bg-surface border border-outline-variant/30 rounded-sm p-4 flex gap-4 h-[170px]">
-              <div className="w-[84px] h-[116px] bg-outline-variant/30 rounded-sm shrink-0" />
-              <div className="flex flex-col justify-between py-0.5 flex-grow space-y-2">
-                <div>
-                  <div className="h-3 bg-outline-variant/30 rounded w-16 mb-2" />
-                  <div className="h-4 bg-outline-variant/30 rounded w-3/4 mb-1" />
-                  <div className="h-4 bg-outline-variant/30 rounded w-1/2" />
-                </div>
-                <div className="flex justify-between items-center mt-auto pt-1 border-t border-outline-variant/30">
-                  <div className="h-3 bg-outline-variant/30 rounded w-12" />
-                  <div className="h-3 bg-outline-variant/30 rounded w-20" />
-                </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-pulse">
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => (
+            <div key={n} className="bg-surface border border-outline-variant/30 rounded-sm overflow-hidden flex flex-col h-[280px]">
+              <div className="h-48 bg-outline-variant/30 w-full" />
+              <div className="p-3 space-y-2 flex-1 flex flex-col justify-between">
+                <div className="h-4 bg-outline-variant/30 rounded w-3/4" />
+                <div className="h-3 bg-outline-variant/30 rounded w-1/2" />
               </div>
             </div>
           ))}
@@ -233,17 +210,18 @@ const NewUpdatePage: React.FC = () => {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
             {pagedNovels.map((novel) => (
-              <UpdateCard
+              <NovelCard
                 key={novel.id}
                 id={novel.id}
                 title={novel.title}
-                chapter={`Chương ${novel.chapter_count}`}
-                time={formatRelativeTime(novel.updated_at)}
+                author={novel.author}
+                status={novel.status}
+                statusColor={novel.color}
                 image={novel.cover}
-                tags={novel.tags}
                 views={novel.views}
+                isVip={novel.is_vip}
               />
             ))}
           </div>

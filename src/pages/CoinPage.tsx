@@ -213,8 +213,8 @@ export default function CoinPage() {
 
   const customAmountNum = parseInt(customAmount.replace(/\D/g, ''), 10) || 0
   const customAmountError: string | null =
-    customAmount && customAmountNum < 5000 ? 'Tối thiểu 5.000 VND' :
-      customAmount && customAmountNum % 1000 !== 0 ? 'Phải là bội số của 1.000 (vd: 5.000, 10.000, 50.000)' :
+    customAmount && customAmountNum < 20000 ? 'Tối thiểu 20.000 VND' :
+      customAmount && customAmountNum % 1000 !== 0 ? 'Phải là bội số của 1.000 (vd: 20.000, 50.000, 100.000)' :
         customAmount && customAmountNum > 10_000_000 ? 'Tối đa 10.000.000 VND' :
           null
 
@@ -687,13 +687,13 @@ export default function CoinPage() {
             {isCustom && !deposit && (
               <div className="p-5 bg-primary/5 border border-primary/20 rounded-xl space-y-3 animate-in fade-in duration-200">
                 <p className="text-sm font-semibold">
-                  Nhập số tiền <span className="text-on-surface-variant font-normal">(VND, bội số 1.000, tối thiểu 5.000)</span>
+                  Nhập số tiền <span className="text-on-surface-variant font-normal">(VND, bội số 1.000, tối thiểu 20.000)</span>
                 </p>
                 <div className="space-y-1.5 w-full">
                   <div className="flex flex-col sm:flex-row gap-3">
                     <input
                       type="number"
-                      min={5000}
+                      min={20000}
                       step={1000}
                       value={customAmount}
                       onChange={e => setCustomAmount(e.target.value)}
@@ -714,7 +714,7 @@ export default function CoinPage() {
                   </div>
                   {customAmountError ? (
                     <p className="text-xs text-red-500 font-bold mt-0.5">{customAmountError}</p>
-                  ) : customAmountNum >= 5000 ? (
+                  ) : customAmountNum >= 20000 ? (
                     <p className="text-xs text-emerald-600 font-bold mt-0.5">
                       = {customAmountNum.toLocaleString('vi-VN')} xu · đọc ~{Math.floor(customAmountNum / 100)} chương VIP
                     </p>

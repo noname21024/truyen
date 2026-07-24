@@ -11,7 +11,7 @@ import 'swiper/css/pagination';
 import novelsDataJson from '@/data/novelsIndex.json';
 import { formatViews } from '@/lib/format';
 import ViconicIcon from '@/components/ui/ViconicIcon';
-import { CategoryService, NovelService, CommentService, type StoryCommentData, type ChapterCommentData } from '@/lib/api';
+import { CategoryService, NovelService, CommentService, StoryFollowService, ReadingProgressService, type StoryCommentData, type ChapterCommentData } from '@/lib/api';
 
 const novelsData = novelsDataJson as any[];
 
@@ -223,45 +223,55 @@ const HomePage: React.FC = () => {
   useEffect(() => {
     if (!currentUser) { setFollowedNovels([]); return; }
     let cancelled = false;
-    NovelService.getNovels()
-      .then(data => {
-        if (cancelled || !data) return;
-        const followed = data.filter(n =>
-          localStorage.getItem(`follow_novel_${n.id}_user_${currentUser.name}`) === '1' ||
-          localStorage.getItem(`follow_novel_${n.slug}_user_${currentUser.name}`) === '1'
-        ).map(n => ({
+
+    const loadFollowed = () => {
+      Promise.all([NovelService.getNovels(), StoryFollowService.getMyFollows()])
+        .then(([data, followedIds]) => {
+          if (cancelled || !data) return;
+          const followedSet = new Set(followedIds);
+          const followed = data.filter(n => followedSet.has(n.id)).map(n => ({
+            id: n.id,
+            title: n.title,
+            cover: n.cover_url || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
+            author: n.author || "Đang cập nhật",
+            update_time: n.updated_at,
+            total_chapters: n.total_chapters || 0,
+          }));
+          followed.sort((a, b) => new Date(b.update_time).getTime() - new Date(a.update_time).getTime());
+          setFollowedNovels(followed);
+        })
+        .catch(() => {});
+    };
+
+    loadFollowed();
+    // A card's follow button fires this once the server write lands.
+    window.addEventListener('followed-novels-updated', loadFollowed);
+    return () => { cancelled = true; window.removeEventListener('followed-novels-updated', loadFollowed); };
+  }, [currentUser]);
+
+  // Load viewing history — server-backed (survives cleared cache / new device),
+  // falling back to the local list when logged out (see getHistoryStoryIds).
+  useEffect(() => {
+    if (novels.length === 0) return;
+    let cancelled = false;
+    ReadingProgressService.getHistoryStoryIds()
+      .then(historyIds => {
+        if (cancelled) return;
+        if (historyIds.length === 0) { setHistoryNovels([]); return; }
+        const matched = novels.filter(n => historyIds.includes(n.id)).map(n => ({
           id: n.id,
           title: n.title,
-          cover: n.cover_url || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
+          cover: n.cover || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
           author: n.author || "Đang cập nhật",
-          update_time: n.updated_at,
-          total_chapters: n.total_chapters || 0,
+          update_time: n.update_time,
+          total_chapters: n.chapter_count || 0,
         }));
-        followed.sort((a, b) => new Date(b.update_time).getTime() - new Date(a.update_time).getTime());
-        setFollowedNovels(followed);
+        matched.sort((a, b) => historyIds.indexOf(a.id) - historyIds.indexOf(b.id));
+        setHistoryNovels(matched);
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [currentUser]);
-
-  // Load viewing history from localStorage + novels list
-  useEffect(() => {
-    if (novels.length === 0) return;
-    try {
-      const historySlugs: string[] = JSON.parse(localStorage.getItem('viewing_history') || '[]');
-      if (historySlugs.length === 0) { setHistoryNovels([]); return; }
-      const matched = novels.filter(n => historySlugs.includes(n.id)).map(n => ({
-        id: n.id,
-        title: n.title,
-        cover: n.cover || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
-        author: n.author || "Đang cập nhật",
-        update_time: n.update_time,
-        total_chapters: n.chapter_count || 0,
-      }));
-      matched.sort((a, b) => historySlugs.indexOf(a.id) - historySlugs.indexOf(b.id));
-      setHistoryNovels(matched);
-    } catch (e) {}
-  }, [novels]);
+  }, [novels, currentUser]);
 
   // Load recent story + chapter comments
   useEffect(() => {
@@ -696,10 +706,10 @@ const HomePage: React.FC = () => {
                           </Link>
                         );
                       })}
-                      {followedNovels.length > 5 && (
-                        <button onClick={() => setShowAllFollowed(!showAllFollowed)} className="w-full text-center mt-1 py-2 font-bold text-xs text-primary hover:bg-primary/5 rounded border border-dashed border-outline-variant transition-colors">
-                          {showAllFollowed ? "Thu gọn" : `Xem tất cả (${followedNovels.length})`}
-                        </button>
+                      {followedNovels.length > 0 && (
+                        <Link to="/profile?tab=shelf" className="block w-full text-center mt-1 py-2 font-bold text-xs text-primary hover:bg-primary/5 rounded border border-dashed border-outline-variant transition-colors">
+                          Xem tất cả ({followedNovels.length})
+                        </Link>
                       )}
                     </>
                   )
@@ -724,10 +734,10 @@ const HomePage: React.FC = () => {
                           </Link>
                         );
                       })}
-                      {historyNovels.length > 5 && (
-                        <button onClick={() => setShowAllHistory(!showAllHistory)} className="w-full text-center mt-1 py-2 font-bold text-xs text-primary hover:bg-primary/5 rounded border border-dashed border-outline-variant transition-colors">
-                          {showAllHistory ? "Thu gọn" : `Xem tất cả (${historyNovels.length})`}
-                        </button>
+                      {historyNovels.length > 0 && (
+                        <Link to="/profile?tab=history" className="block w-full text-center mt-1 py-2 font-bold text-xs text-primary hover:bg-primary/5 rounded border border-dashed border-outline-variant transition-colors">
+                          Xem tất cả ({historyNovels.length})
+                        </Link>
                       )}
                     </>
                   )

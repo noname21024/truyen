@@ -2,6 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import ViconicIcon from '@/components/ui/ViconicIcon';
 import { formatViews } from '@/lib/format';
+import { StoryFollowService } from '@/lib/api';
 
 interface NovelCardProps {
   id: string | number;
@@ -24,7 +25,7 @@ const NovelCard: React.FC<NovelCardProps> = ({ id, title, author, status, image,
       try {
         const u = JSON.parse(saved);
         setCurrentUser(u);
-        const followed = localStorage.getItem(`follow_novel_${id}_user_${u.name}`) === '1';
+        const followed = localStorage.getItem(`follow_novel_${id}_user_${u.id}`) === '1';
         setIsFollowed(followed);
       } catch (e) {}
     }
@@ -34,7 +35,7 @@ const NovelCard: React.FC<NovelCardProps> = ({ id, title, author, status, image,
       if (savedUser) {
         try {
           const u = JSON.parse(savedUser);
-          const followed = localStorage.getItem(`follow_novel_${id}_user_${u.name}`) === '1';
+          const followed = localStorage.getItem(`follow_novel_${id}_user_${u.id}`) === '1';
           setIsFollowed(followed);
         } catch {}
       }
@@ -43,7 +44,7 @@ const NovelCard: React.FC<NovelCardProps> = ({ id, title, author, status, image,
     return () => window.removeEventListener('followed-novels-updated', handleFollowUpdate);
   }, [id]);
 
-  const handleFollowToggle = (e: React.MouseEvent) => {
+  const handleFollowToggle = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -54,21 +55,28 @@ const NovelCard: React.FC<NovelCardProps> = ({ id, title, author, status, image,
       return;
     }
 
-    const key = `follow_novel_${id}_user_${currentUser.name}`;
-    if (isFollowed) {
-      localStorage.removeItem(key);
-      setIsFollowed(false);
-      import('@/lib/dialog').then(({ showToast }) => {
-        showToast(`Đã hủy theo dõi truyện ${title}`);
-      });
-    } else {
-      localStorage.setItem(key, '1');
-      setIsFollowed(true);
-      import('@/lib/dialog').then(({ showToast }) => {
-        showToast(`Đã thêm ${title} vào danh sách theo dõi`);
-      });
+    const key = `follow_novel_${id}_user_${currentUser.id}`;
+    const wasFollowed = isFollowed;
+    setIsFollowed(!wasFollowed);
+
+    try {
+      // This used to only write localStorage, so following from a card never
+      // reached the server: it vanished on another browser, and once the shelf
+      // started reading from the server it stopped showing up at all.
+      const result = await StoryFollowService.toggle(id);
+      setIsFollowed(result.following);
+      if (result.following) localStorage.setItem(key, '1');
+      else localStorage.removeItem(key);
+      const { showToast } = await import('@/lib/dialog');
+      showToast(result.following
+        ? `Đã thêm ${title} vào danh sách theo dõi`
+        : `Đã hủy theo dõi truyện ${title}`);
+      window.dispatchEvent(new CustomEvent('followed-novels-updated'));
+    } catch {
+      setIsFollowed(wasFollowed);
+      const { showToast } = await import('@/lib/dialog');
+      showToast('Không thể cập nhật theo dõi. Vui lòng thử lại!');
     }
-    window.dispatchEvent(new CustomEvent('followed-novels-updated'));
   };
 
   // Standardize status text and color
@@ -79,7 +87,11 @@ const NovelCard: React.FC<NovelCardProps> = ({ id, title, author, status, image,
     : 'bg-primary/10 text-primary border border-primary/20';
 
   return (
-    <div className="group relative">
+    // `isolate` keeps the z-30 follow button and z-20 hover overlay inside the
+    // card's own stacking context. Without it they sit in the page context at the
+    // same z-30 as the sort/genre dropdowns on the listing pages — and since the
+    // cards come later in the DOM, they painted on top of an open dropdown.
+    <div className="group relative isolate">
       <Link
         data-novel-slug={id}
         to={`/detail/${id}`}
@@ -106,7 +118,13 @@ const NovelCard: React.FC<NovelCardProps> = ({ id, title, author, status, image,
             }`}
             title={isFollowed ? "Hủy theo dõi" : "Theo dõi truyện"}
           >
-            <ViconicIcon name="m9:bookmark-rounded" size={16} />
+            {/* Lucide icons are stroke-only, so "filled" comes from painting the
+                interior with the current text colour once followed. */}
+            <ViconicIcon
+              name="m9:bookmark-rounded"
+              size={16}
+              className={isFollowed ? 'fill-current' : ''}
+            />
           </button>
 
           {/* Quick Action Overlay */}

@@ -15,8 +15,8 @@ interface PageMeta {
 const API_BASE = 'https://api.pubnihtruyen.com/api';
 const SITE_URL = 'https://pubnihtruyen.com';
 const SITE_NAME = 'Pub Nih Truyện';
-const DEFAULT_TITLE = 'Pub Nih Truyện - Thế Giới Light Novel & Dịch Giả';
-const DEFAULT_DESCRIPTION = 'Đọc Light Novel dịch full miễn phí, cập nhật chương mới mỗi ngày. Kho truyện ngôn tình, huyền huyễn, xuyên không, hệ thống... giao diện mượt, không quảng cáo.';
+const DEFAULT_TITLE = 'Pub Nih Truyện - Đọc Truyện Online & Nghe Truyện Audio';
+const DEFAULT_DESCRIPTION = 'Đọc truyện online miễn phí và nghe truyện audio, cập nhật chương mới mỗi ngày. Kho truyện ngôn tình, huyền huyễn, xuyên không, hệ thống... giao diện mượt, không quảng cáo.';
 const DEFAULT_IMAGE = `${SITE_URL}/logo.png`;
 const R2_DEV_BASE = 'https://pub-71585e468cd741989c43b01356ee9591.r2.dev';
 const CDN_BASE = 'https://cdn.pubnihtruyen.com';
@@ -32,9 +32,9 @@ const STATIC_META: Record<string, PageMeta> = {
   },
   '/ranking': { title: `Bảng Xếp Hạng Truyện | ${SITE_NAME}`, description: 'Xếp hạng những truyện được đọc nhiều nhất trên Pub Nih Truyện theo lượt xem thực tế.' },
   '/new-update': { title: `Mới Cập Nhật | ${SITE_NAME}`, description: 'Danh sách truyện vừa cập nhật chương mới nhất trên Pub Nih Truyện.' },
-  '/completed': { title: `Truyện Đã Hoàn Thành | ${SITE_NAME}`, description: 'Kho truyện light novel đã hoàn thành, đọc trọn bộ không phải chờ chương mới.' },
+  '/completed': { title: `Truyện Đã Hoàn Thành | ${SITE_NAME}`, description: 'Kho truyện đã hoàn thành, đọc trọn bộ không phải chờ chương mới.' },
   '/genres': { title: `Thể Loại Truyện | ${SITE_NAME}`, description: 'Duyệt truyện theo thể loại: ngôn tình, huyền huyễn, xuyên không, hệ thống...' },
-  '/search': { title: `Tìm Kiếm Truyện | ${SITE_NAME}`, description: 'Tìm kiếm light novel theo tên truyện, tác giả trên Pub Nih Truyện.' },
+  '/search': { title: `Tìm Kiếm Truyện | ${SITE_NAME}`, description: 'Tìm kiếm truyện theo tên truyện, tác giả trên Pub Nih Truyện.' },
   '/leaderboard': { title: `Bảng Vàng Đóng Góp | ${SITE_NAME}`, description: 'Bảng xếp hạng những độc giả ủng hộ dịch giả nhiều nhất trên Pub Nih Truyện.' },
 };
 

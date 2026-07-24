@@ -1,12 +1,33 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import ViconicIcon from '@/components/ui/ViconicIcon';
 import NovelCard from '@/components/cards/NovelCard';
 import SimplePagination from '@/components/ui/SimplePagination';
-import { NovelService, CoinService } from '@/lib/api';
-import { showCustomAlert, showCustomConfirm } from '@/lib/dialog';
+import { NovelService, CoinService, AuthService, StoryFollowService, ReadingProgressService } from '@/lib/api';
+import { showCustomAlert, showCustomConfirm, showToast } from '@/lib/dialog';
 import { isUserVIP } from '@/lib/user';
 
+/**
+ * One row per story, keeping whichever visit is most recent.
+ *
+ * The same story could be recorded under its slug and again under its numeric
+ * id, so entries are folded together on whichever identifier they share.
+ */
+function dedupeHistory(items: any[]): any[] {
+  const byStory = new Map<string, any>();
+  for (const item of items) {
+    const key = String(item.storySlug || item.novelId);
+    const seen = byStory.get(key);
+    if (!seen || new Date(item.timestamp) > new Date(seen.timestamp)) {
+      byStory.set(key, item);
+    }
+  }
+  return [...byStory.values()].sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  );
+}
+
+const AVATAR_MAX_MB = 2;
 const LIST_PAGE_SIZE = 10;
 const GRID_PAGE_SIZE = 12;
 
@@ -15,12 +36,80 @@ const ProfilePage: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<any | null>(null);
   const [followedNovels, setFollowedNovels] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'shelf' | 'history' | 'purchased'>('shelf');
+  // Other pages deep-link straight to a tab, e.g. "Xem tất cả" on the followed
+  // and history columns → /profile?tab=shelf | history.
+  const [searchParams] = useSearchParams();
+  const initialTab = (['shelf', 'history', 'purchased'] as const).find(t => t === searchParams.get('tab')) || 'shelf';
+  const [activeTab, setActiveTab] = useState<'shelf' | 'history' | 'purchased'>(initialTab);
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [purchasedNovels, setPurchasedNovels] = useState<any[]>([]);
   const [shelfPage, setShelfPage] = useState(1);
   const [historyPage, setHistoryPage] = useState(1);
   const [purchasedPage, setPurchasedPage] = useState(1);
+
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [savingName, setSavingName] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const avatarInputRef = React.useRef<HTMLInputElement>(null);
+
+  // The rest of the app reads the signed-in reader from localStorage, so every
+  // profile change has to be written back there too or the header would keep
+  // showing the previous name and picture until the next sign-in.
+  const persistUser = (patch: Record<string, unknown>) => {
+    // Write storage first, then announce. React runs state updaters later, so
+    // doing the write inside one would fire the event while listeners still
+    // read the previous value — and updaters must stay free of side effects.
+    let stored: Record<string, unknown> = {};
+    try { stored = JSON.parse(localStorage.getItem('user') || '{}'); } catch {}
+    const next = { ...stored, ...patch };
+    localStorage.setItem('user', JSON.stringify(next));
+    setCurrentUser((prev: any) => ({ ...prev, ...patch }));
+    window.dispatchEvent(new CustomEvent('user-updated'));
+  };
+
+  const handleSaveName = async () => {
+    const name = nameDraft.trim();
+    if (name === currentUser?.name) { setEditingName(false); return; }
+    if (name.length < 2 || name.length > 30) {
+      showToast('Tên hiển thị phải từ 2 đến 30 ký tự.');
+      return;
+    }
+    setSavingName(true);
+    try {
+      const result = await AuthService.updateName(name);
+      persistUser({ name: result.name });
+      setEditingName(false);
+      showToast('Đã cập nhật tên hiển thị!');
+    } catch (err: any) {
+      showToast(err?.response?.data?.error || 'Không thể đổi tên. Vui lòng thử lại.');
+    } finally {
+      setSavingName(false);
+    }
+  };
+
+  const handlePickAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset immediately so picking the same file twice still fires onChange.
+    e.target.value = '';
+    if (!file) return;
+    // Mirrors AVATAR_MAX_BYTES on the server — this only saves a wasted upload,
+    // the server check is the one that actually enforces it.
+    if (file.size > AVATAR_MAX_MB * 1024 * 1024) {
+      showToast(`Ảnh tối đa ${AVATAR_MAX_MB}MB.`);
+      return;
+    }
+    setUploadingAvatar(true);
+    try {
+      const result = await AuthService.uploadAvatar(file);
+      persistUser({ avatar: result.avatar_url, avatar_url: result.avatar_url });
+      showToast('Đã đổi ảnh đại diện!');
+    } catch (err: any) {
+      showToast(err?.response?.data?.error || 'Tải ảnh lên thất bại. Vui lòng thử lại.');
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
 
   const formatRelativeTime = (isoString: string) => {
     try {
@@ -61,27 +150,13 @@ const ProfilePage: React.FC = () => {
         })
         .catch(() => {});
 
-      // Scan localStorage to find followed novel slugs for this specific user
-      const followedSlugs: string[] = [];
-      const prefix = 'follow_novel_';
-      const userPart = `_user_${parsedUser.name}`;
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith(prefix) && key.endsWith(userPart)) {
-          // Robust split-based slug extraction
-          const parts = key.split(userPart);
-          if (parts.length > 0) {
-            const slug = parts[0].substring(prefix.length);
-            followedSlugs.push(slug);
-          }
-        }
-      }
-
-      // Fetch novels from API and filter matches
-      NovelService.getNovels()
-        .then(data => {
-          const matched = data.filter((novel: any) => followedSlugs.includes(novel.slug) || followedSlugs.includes(String(novel.id)));
-          setFollowedNovels(matched);
+      // Read the shelf from the server. This used to scan localStorage for keys
+      // ending in the user's display name, so renaming yourself hid every book
+      // you follow — and the shelf was empty on any other browser anyway.
+      Promise.all([NovelService.getNovels(), StoryFollowService.getMyFollows()])
+        .then(([data, followedIds]) => {
+          const followedSet = new Set(followedIds);
+          setFollowedNovels(data.filter((novel: any) => followedSet.has(novel.id)));
           setLoading(false);
         })
         .catch(err => {
@@ -98,27 +173,30 @@ const ProfilePage: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
     
-    // 1. Load viewing history list from localStorage and map with cover images
-    try {
-      const hist = localStorage.getItem('reading_history_list');
-      if (hist) {
-        const parsed = JSON.parse(hist) as any[];
-        NovelService.getNovels()
-          .then(allStories => {
-            const mapped = parsed.map(item => {
-              const matchedNovel = allStories.find(s => s.id === item.novelId || s.slug === item.novelId);
-              return {
-                ...item,
-                coverUrl: matchedNovel?.cover_url || 'https://placehold.co/120x168/e2e8f0/64748b?text=Book'
-              };
-            });
-            setHistoryList(mapped);
-          })
-          .catch(() => {
-            setHistoryList(parsed);
-          });
-      }
-    } catch {}
+    // 1. Load viewing history from the server so it survives a cleared cache /
+    // new device and stays consistent with the sidebar widget (both read from
+    // ReadingProgress). Falls back to the old localStorage list only if the
+    // server call fails.
+    ReadingProgressService.getAll()
+      .then(rows => {
+        const mapped = rows.map(p => ({
+          novelId: p.story,
+          novelTitle: p.story_title,
+          storySlug: p.story_slug,
+          coverUrl: p.story_cover || 'https://placehold.co/120x168/e2e8f0/64748b?text=Book',
+          chapterNumber: p.last_chapter_number,
+          chapterTitle: p.last_chapter_title || `Chương ${p.last_chapter_number}`,
+          timestamp: p.updated_at,
+        }));
+        setHistoryList(mapped);
+      })
+      .catch(() => {
+        // Network/server hiccup — show whatever the local list still has.
+        try {
+          const hist = localStorage.getItem('reading_history_list');
+          if (hist) setHistoryList(dedupeHistory(JSON.parse(hist) as any[]));
+        } catch {}
+      });
 
     // 2. Fetch purchased stories by checking spend transactions
     CoinService.getTransactions()
@@ -266,20 +344,82 @@ const ProfilePage: React.FC = () => {
                     className="w-24 h-24 rounded-full border-4 border-surface object-cover shadow-md"
                   />
                 )}
-                <div className="absolute bottom-1 right-1 w-5 h-5 bg-green-500 border-4 border-surface rounded-full shadow-sm" />
+                <button
+                  onClick={() => avatarInputRef.current?.click()}
+                  disabled={uploadingAvatar}
+                  title="Đổi ảnh đại diện"
+                  aria-label="Đổi ảnh đại diện"
+                  className="absolute inset-0 rounded-full bg-black/55 text-white opacity-0 hover:opacity-100 focus-visible:opacity-100 transition-opacity flex flex-col items-center justify-center gap-0.5 disabled:opacity-100 disabled:bg-black/60"
+                >
+                  {uploadingAvatar ? (
+                    <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <ViconicIcon name="camera" size={18} className="shrink-0" />
+                      <span className="text-[9px] font-bold">Đổi ảnh</span>
+                    </>
+                  )}
+                </button>
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={handlePickAvatar}
+                  className="hidden"
+                />
+                <div className="absolute bottom-1 right-1 w-5 h-5 bg-green-500 border-4 border-surface rounded-full shadow-sm pointer-events-none" />
               </div>
 
               {/* User Bio */}
-              <h2 className="font-display-lg text-lg font-bold text-on-surface mb-0.5 text-center flex items-center gap-1.5 justify-center">
-                <span>{currentUser.name}</span>
-                {isUserVIP(currentUser.name) && (
-                  <span className="vip-badge-rainbow select-none shrink-0">
-                    <span className="vip-badge-rainbow-inner">
-                      <span className="vip-text-rainbow text-[8px] font-black uppercase">VIP</span>
+              {editingName ? (
+                <div className="w-full flex items-center gap-1.5 mb-1">
+                  <input
+                    autoFocus
+                    value={nameDraft}
+                    maxLength={30}
+                    onChange={e => setNameDraft(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') handleSaveName();
+                      if (e.key === 'Escape') setEditingName(false);
+                    }}
+                    className="flex-grow min-w-0 bg-surface-variant/40 border border-outline-variant rounded-sm px-2 py-1 text-sm text-on-surface text-center focus:outline-none focus:border-primary"
+                  />
+                  <button
+                    onClick={handleSaveName}
+                    disabled={savingName}
+                    title="Lưu"
+                    className="shrink-0 p-1.5 rounded-sm bg-primary text-on-primary hover:bg-primary/90 disabled:opacity-60"
+                  >
+                    <ViconicIcon name="check" size={14} className="shrink-0" />
+                  </button>
+                  <button
+                    onClick={() => setEditingName(false)}
+                    title="Huỷ"
+                    className="shrink-0 p-1.5 rounded-sm bg-surface-variant text-on-surface-variant hover:bg-surface-variant/70"
+                  >
+                    <ViconicIcon name="close" size={14} className="shrink-0" />
+                  </button>
+                </div>
+              ) : (
+                <h2 className="font-display-lg text-lg font-bold text-on-surface mb-0.5 text-center flex items-center gap-1.5 justify-center">
+                  <span>{currentUser.name}</span>
+                  {isUserVIP(currentUser.name) && (
+                    <span className="vip-badge-rainbow select-none shrink-0">
+                      <span className="vip-badge-rainbow-inner">
+                        <span className="vip-text-rainbow text-[8px] font-black uppercase">VIP</span>
+                      </span>
                     </span>
-                  </span>
-                )}
-              </h2>
+                  )}
+                  <button
+                    onClick={() => { setNameDraft(currentUser.name || ''); setEditingName(true); }}
+                    title="Đổi tên hiển thị"
+                    aria-label="Đổi tên hiển thị"
+                    className="shrink-0 p-1 rounded-sm text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors"
+                  >
+                    <ViconicIcon name="edit" size={13} className="shrink-0" />
+                  </button>
+                </h2>
+              )}
               {isUserVIP(currentUser.name) ? (
                 <span className="vip-pill-rainbow text-[10px] px-3 py-1 rounded-full uppercase tracking-wider mb-5">
                   Hội Viên VIP

@@ -1,4 +1,4 @@
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import MainLayout from './components/layout/MainLayout'
 import { Spinner } from './components/ui/spinner'
@@ -30,7 +30,30 @@ function RouteFallback() {
   )
 }
 
+// Signed out remotely because the account hit its device limit. api.ts has
+// already cleared the stored token; this only explains why, once, and reloads
+// so no stale logged-in UI is left on screen.
+function useSessionRevokedNotice() {
+  useEffect(() => {
+    let handled = false
+    const onRevoked = () => {
+      if (handled) return
+      handled = true
+      import('./lib/dialog').then(({ showCustomAlert }) => {
+        showCustomAlert(
+          'Phiên đăng nhập đã kết thúc',
+          'Tài khoản của bạn vừa đăng nhập trên thiết bị khác. Mỗi tài khoản chỉ dùng được trên 2 thiết bị cùng lúc.',
+          () => { window.location.href = '/' }
+        )
+      })
+    }
+    window.addEventListener('session-revoked', onRevoked)
+    return () => window.removeEventListener('session-revoked', onRevoked)
+  }, [])
+}
+
 function App() {
+  useSessionRevokedNotice()
   return (
     <Router>
       <ScrollToTop />

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import UpdateCard from '@/components/cards/UpdateCard';
+import NovelCard from '@/components/cards/NovelCard';
 import ViconicIcon from '@/components/ui/ViconicIcon';
 import { AuthorService, NovelService, type Author } from '@/lib/api';
 
@@ -23,16 +23,22 @@ const AuthorPage: React.FC = () => {
       .then(authorData => {
         if (cancelled) return;
         setAuthor(authorData);
-        document.title = `Truyện của ${authorData.name_vi || authorData.name_zh} | Pub Nih Truyện`;
+        const authorName = authorData.name_vi || authorData.name_zh || "Đang cập nhật";
+        document.title = `Truyện của ${authorName} | Pub Nih Truyện`;
         return NovelService.getNovels({ author: authorData.slug }).then(novelsData => {
           if (cancelled) return;
           const mapped = (novelsData || []).map(n => ({
             id: n.id,
             title: n.title,
+            author: n.author || authorName,
+            status: n.status === 'COMPLETED' ? 'Hoàn thành' : 'Đang ra',
+            color: n.status === 'COMPLETED' ? 'bg-blue-500/10 text-blue-500 border border-blue-500/20' : 'bg-green-100 text-green-700 border-green-200',
+            update_time: n.updated_at,
             cover: n.cover_url || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
             tags: (n.genres || []).map(g => g.name),
             chapter_count: n.total_chapters || 0,
             views: n.view_count || 0,
+            is_vip: n.is_vip,
           }));
           mapped.sort((a, b) => b.views - a.views);
           setNovels(mapped);
@@ -104,32 +110,30 @@ const AuthorPage: React.FC = () => {
 
       {/* Story Grid */}
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-pulse">
-          {[1, 2, 3].map(n => (
-            <div key={n} className="bg-surface border border-outline-variant/30 rounded-sm p-3 flex gap-4 h-[136px]">
-              <div className="w-20 h-28 bg-outline-variant/30 rounded-sm shrink-0" />
-              <div className="flex flex-col justify-between py-1 flex-grow space-y-2">
-                <div>
-                  <div className="h-4 bg-outline-variant/30 rounded w-3/4 mb-1" />
-                  <div className="h-4 bg-outline-variant/30 rounded w-1/2" />
-                </div>
-                <div className="h-3 bg-outline-variant/30 rounded w-20" />
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-pulse">
+          {[1, 2, 3, 4, 5, 6].map(n => (
+            <div key={n} className="bg-surface border border-outline-variant/30 rounded-sm overflow-hidden flex flex-col h-[280px]">
+              <div className="h-48 bg-outline-variant/30 w-full" />
+              <div className="p-3 space-y-2 flex-1 flex flex-col justify-between">
+                <div className="h-4 bg-outline-variant/30 rounded w-3/4" />
+                <div className="h-3 bg-outline-variant/30 rounded w-1/2" />
               </div>
             </div>
           ))}
         </div>
       ) : novels.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
           {novels.map(novel => (
-            <UpdateCard
+            <NovelCard
               key={novel.id}
               id={novel.id}
               title={novel.title}
-              chapter={`${novel.chapter_count || 0} chương`}
-              time="Cập nhật"
+              author={novel.author}
+              status={novel.status}
+              statusColor={novel.color}
               image={novel.cover}
-              tags={novel.tags}
               views={novel.views}
+              isVip={novel.is_vip}
             />
           ))}
         </div>

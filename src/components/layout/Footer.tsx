@@ -6,8 +6,10 @@ const Footer: React.FC = () => {
   const isChapterPage = location.pathname.startsWith('/chapter/');
 
   return (
-    <footer className={`w-full mt-16 border-t border-surface-variant bg-surface-bright flex flex-col items-center space-y-6 py-12 px-4 relative z-10 ${
-      isChapterPage ? 'pb-44 md:pb-36' : 'pb-24 md:pb-12'
+    <footer className={`w-full border-t border-surface-variant bg-surface-bright flex flex-col items-center space-y-6 py-12 px-4 relative z-10 ${
+      // No gap after the reader — the chapter text should run straight into the
+      // footer instead of leaving a band of empty space.
+      isChapterPage ? 'mt-0 pb-44 md:pb-36' : 'mt-16 pb-24 md:pb-12'
     }`}>
       <div className="flex items-center gap-1.5">
         <img src="/logo.svg" alt="Pub Nih Truyện Logo" className="w-[25px] h-[25px] object-contain shrink-0" />

@@ -1,13 +1,21 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import UpdateCard from '@/components/cards/UpdateCard';
+import NovelCard from '@/components/cards/NovelCard';
 import ViconicIcon from '@/components/ui/ViconicIcon';
 import SimplePagination from '@/components/ui/SimplePagination';
 import { CategoryService, NovelService } from '@/lib/api';
 
-type SortOption = 'newest' | 'chapters' | 'views' | 'words';
+type SortOption = 'newest' | 'chapters' | 'views' | 'follows' | 'comments';
 
-const PAGE_SIZE = 12;
+const SORT_LABELS: Record<SortOption, string> = {
+  newest: 'Mới nhất',
+  chapters: 'Nhiều chương',
+  views: 'Nhiều lượt xem',
+  follows: 'Nhiều theo dõi',
+  comments: 'Nhiều bình luận',
+};
+
+const PAGE_SIZE = 24;
 
 const GenrePage: React.FC = () => {
   const { genreId } = useParams<{ genreId: string }>();
@@ -46,12 +54,15 @@ const GenrePage: React.FC = () => {
             title: dbNovel.title,
             author: dbNovel.author || "Đang cập nhật",
             status: dbNovel.status === 'COMPLETED' ? 'Hoàn thành' : 'Đang ra',
+            color: dbNovel.status === 'COMPLETED' ? 'bg-blue-500/10 text-blue-500 border border-blue-500/20' : 'bg-green-100 text-green-700 border-green-200',
             tags: (dbNovel.genres || []).map((g: any) => g.name),
             cover: dbNovel.cover_url || "https://placehold.co/400x600/e2e8f0/64748b?text=No+Cover",
             chapter_count: dbNovel.total_chapters || 0,
             views: dbNovel.view_count || 0,
+            follows: dbNovel.follow_count || 0,
+            comments: dbNovel.comment_count || 0,
             update_time: dbNovel.updated_at,
-            word_count: 0,
+            is_vip: dbNovel.is_vip,
           }));
           setNovels(mapped);
         }
@@ -68,11 +79,22 @@ const GenrePage: React.FC = () => {
   // numeric id-based links resolve to a name once categories load, see effect below)
   const [selectedGenres, setSelectedGenres] = useState<string[]>(genreId && !genreIdIsNumeric ? [genreId] : []);
   const [sortBy, setSortBy] = useState<SortOption>('newest');
+  const [isSortOpen, setIsSortOpen] = useState(false);
+  const sortRef = useRef<HTMLDivElement>(null);
   const [showAllGenres, setShowAllGenres] = useState(false);
   const [page, setPage] = useState(1);
 
   // Reset to page 1 whenever filters/sort change
   useEffect(() => { setPage(1); }, [selectedGenres, sortBy]);
+
+  // Close the sort dropdown when clicking anywhere outside it
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (sortRef.current && !sortRef.current.contains(e.target as Node)) setIsSortOpen(false);
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, []);
 
   // Auto-expand showAllGenres if any selected genre is not in the first 24
   useEffect(() => {
@@ -129,8 +151,11 @@ const GenrePage: React.FC = () => {
       case 'views':
         result = [...result].sort((a, b) => (b.views || 0) - (a.views || 0));
         break;
-      case 'words':
-        result = [...result].sort((a, b) => (b.word_count || 0) - (a.word_count || 0));
+      case 'follows':
+        result = [...result].sort((a, b) => (b.follows || 0) - (a.follows || 0));
+        break;
+      case 'comments':
+        result = [...result].sort((a, b) => (b.comments || 0) - (a.comments || 0));
         break;
     }
 
@@ -199,62 +224,61 @@ const GenrePage: React.FC = () => {
         </div>
       )}
 
-      {/* Sort Bar */}
+      {/* Sort dropdown — same control as the new-update and completed pages */}
       <div className="mb-6 flex items-center gap-2">
         <span className="text-xs text-on-surface-variant font-bold">Sắp xếp:</span>
-        {([
-          { key: 'newest' as SortOption, label: 'Mới nhất' },
-          { key: 'chapters' as SortOption, label: 'Nhiều chương' },
-          { key: 'views' as SortOption, label: 'Nhiều lượt xem' },
-          { key: 'words' as SortOption, label: 'Nhiều chữ' },
-        ]).map(opt => (
+        <div className="relative" ref={sortRef}>
           <button
-            key={opt.key}
-            onClick={() => setSortBy(opt.key)}
-            className={`text-[10px] font-bold px-2.5 py-1.5 rounded-sm border transition-colors ${
-              sortBy === opt.key
-                ? 'bg-on-surface text-surface border-on-surface'
-                : 'bg-surface text-on-surface-variant border-outline-variant/50 hover:border-primary hover:text-primary'
-            }`}
+            onClick={() => setIsSortOpen(!isSortOpen)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-sm border border-outline-variant/50 bg-surface text-xs font-bold text-on-surface-variant hover:border-primary hover:text-primary transition-colors"
           >
-            {opt.label}
+            <ViconicIcon name="sort" size={14} className="shrink-0" />
+            <span>{SORT_LABELS[sortBy]}</span>
+            <ViconicIcon name="arrow_drop_down" size={16} className="shrink-0" />
           </button>
-        ))}
+          {isSortOpen && (
+            <div className="absolute top-full left-0 mt-1.5 w-48 bg-surface border border-outline-variant/50 shadow-xl rounded-sm z-30 overflow-hidden">
+              {(Object.keys(SORT_LABELS) as SortOption[]).map(opt => (
+                <button
+                  key={opt}
+                  onClick={() => { setSortBy(opt); setIsSortOpen(false); }}
+                  className={`w-full text-left px-3 py-2.5 text-xs font-bold transition-colors ${sortBy === opt ? 'bg-primary/10 text-primary' : 'text-on-surface-variant hover:bg-surface-variant/40'}`}
+                >
+                  {SORT_LABELS[opt]}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Results */}
       {loadingNovels ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-pulse">
-          {[1, 2, 3].map(n => (
-            <div key={n} className="bg-surface border border-outline-variant/30 rounded-sm p-3 flex gap-4 h-[136px]">
-              <div className="w-20 h-28 bg-outline-variant/30 rounded-sm shrink-0" />
-              <div className="flex flex-col justify-between py-1 flex-grow space-y-2">
-                <div>
-                  <div className="h-3 bg-outline-variant/30 rounded w-16 mb-2" />
-                  <div className="h-4 bg-outline-variant/30 rounded w-3/4 mb-1" />
-                  <div className="h-4 bg-outline-variant/30 rounded w-1/2" />
-                </div>
-                <div className="flex justify-between items-center mt-auto pt-2 border-t border-outline-variant/30">
-                  <div className="h-3 bg-outline-variant/30 rounded w-12" />
-                  <div className="h-3 bg-outline-variant/30 rounded w-20" />
-                </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-pulse">
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => (
+            <div key={n} className="bg-surface border border-outline-variant/30 rounded-sm overflow-hidden flex flex-col h-[280px]">
+              <div className="h-48 bg-outline-variant/30 w-full" />
+              <div className="p-3 space-y-2 flex-1 flex flex-col justify-between">
+                <div className="h-4 bg-outline-variant/30 rounded w-3/4" />
+                <div className="h-3 bg-outline-variant/30 rounded w-1/2" />
               </div>
             </div>
           ))}
         </div>
       ) : filteredNovels.length > 0 ? (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
             {filteredNovels.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((novel) => (
-              <UpdateCard
+              <NovelCard
                 key={novel.id}
                 id={novel.id}
                 title={novel.title}
-                chapter={`Chương ${novel.chapter_count || 1}`}
-                time="Mới cập nhật"
+                author={novel.author}
+                status={novel.status}
+                statusColor={novel.color}
                 image={novel.cover}
-                tags={novel.tags}
                 views={novel.views}
+                isVip={novel.is_vip}
               />
             ))}
           </div>
