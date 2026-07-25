@@ -107,7 +107,12 @@ const ChapterPage: React.FC = () => {
   const [comments, setComments] = useState<Comment[]>([]);
   const [newCommentText, setNewCommentText] = useState('');
   const [sortBy, setSortBy] = useState<'newest' | 'hot'>('newest');
-  const [currentUser, setCurrentUser] = useState<any | null>(null);
+  // Initialised straight from localStorage (not null-then-effect) so the
+  // login-to-read gate below doesn't flash for an already-signed-in reader on
+  // first paint.
+  const [currentUser, setCurrentUser] = useState<any | null>(() => {
+    try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
+  });
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [reportErrorName, setReportErrorName] = useState('');
   const [reportErrorMessage, setReportErrorMessage] = useState('');
@@ -265,6 +270,13 @@ const ChapterPage: React.FC = () => {
 
   const isLocked = novel?.is_vip && currentChapterNumber > freeUpTo && !isVIPMember && !unlockedChapters.includes(currentChapterNumber);
 
+  // Reading requires an account. Guests can browse the catalogue and open a
+  // chapter page, but the chapter body (and audio) is replaced with a login
+  // prompt. This is a soft, frontend-only gate — it drives sign-ups without
+  // breaking SEO, since crawlers get the server-rendered snapshot from the
+  // worker rather than this React view.
+  const mustLogin = !currentUser;
+
   const curTocIdx = toc.findIndex(c => c.chapter_number === currentChapterNumber);
   const prevEntry = curTocIdx > 0 ? toc[curTocIdx - 1] : null;
   const nextEntry = curTocIdx >= 0 && curTocIdx < toc.length - 1 ? toc[curTocIdx + 1] : null;
@@ -273,7 +285,7 @@ const ChapterPage: React.FC = () => {
   // Deliberately does NOT depend on `audioTrack` — that value changes every time playTrack runs,
   // so including it here would re-trigger this same effect forever (infinite render loop).
   useEffect(() => {
-    if (!audioUrl || !novel || !currentChapterId || isLocked) return;
+    if (!audioUrl || !novel || !currentChapterId || isLocked || mustLogin) return;
     playTrack({
       chapterId: currentChapterId,
       storySlug,
@@ -284,7 +296,7 @@ const ChapterPage: React.FC = () => {
       prevChapterId: prevEntry?.id ?? null,
       nextChapterId: nextEntry?.id ?? null,
     });
-  }, [audioUrl, novel?.title, novel?.cover, currentChapterId, currentChapterNumber, storySlug, prevEntry?.id, nextEntry?.id, playTrack, isLocked]);
+  }, [audioUrl, novel?.title, novel?.cover, currentChapterId, currentChapterNumber, storySlug, prevEntry?.id, nextEntry?.id, playTrack, isLocked, mustLogin]);
 
   // This chapter has no audio of its own — if we've navigated into a different novel,
   // stop whatever that other story was playing. Separate from the effect above so that
@@ -1350,6 +1362,22 @@ const ChapterPage: React.FC = () => {
                 </button>
               )}
             </div>
+          ) : mustLogin ? (
+            <div className="min-h-[420px] flex flex-col items-center justify-center gap-5 py-16 border border-dashed rounded-md">
+              <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center">
+                <ViconicIcon name="lock" size={38} className="text-primary" />
+              </div>
+              <div className="text-center">
+                <h3 className="font-bold text-lg mb-1">Đăng nhập để đọc truyện</h3>
+                <p className="text-sm opacity-60">Vui lòng đăng nhập tài khoản để đọc nội dung chương này.</p>
+              </div>
+              <button
+                onClick={() => window.dispatchEvent(new CustomEvent('open-login-dialog'))}
+                className="bg-primary text-on-primary px-8 py-3 rounded-sm font-bold text-sm flex items-center gap-2 shadow-md shadow-primary/20 hover:bg-primary/95 transition-colors"
+              >
+                <ViconicIcon name="login" size={16} />Đăng nhập để đọc
+              </button>
+            </div>
           ) : chapterData ? (
             renderChapterContent()
           ) : loadError ? (
@@ -1371,7 +1399,7 @@ const ChapterPage: React.FC = () => {
           )}
 
           {/* Chapter Ending Separator */}
-          {!loading && chapterData && !isLocked && (
+          {!loading && chapterData && !isLocked && !mustLogin && (
             <div className="flex justify-center mt-16 items-center gap-4 opacity-30">
               <div className={`h-[1px] w-20 ${theme === 'dark' ? 'bg-white' : 'bg-slate-800'}`} />
               <ViconicIcon name="menu_book" size={16} className="shrink-0" />

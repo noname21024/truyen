@@ -52,8 +52,31 @@ function useSessionRevokedNotice() {
   }, [])
 }
 
+// The stored token was rejected as invalid/expired (natural 30-day expiry, or a
+// server-side signing-key rotation). api.ts has already cleared it; this explains
+// why once and reloads so no stale logged-in UI is left behind.
+function useAuthExpiredNotice() {
+  useEffect(() => {
+    let handled = false
+    const onExpired = () => {
+      if (handled) return
+      handled = true
+      import('./lib/dialog').then(({ showCustomAlert }) => {
+        showCustomAlert(
+          'Phiên đăng nhập đã hết hạn',
+          'Vui lòng đăng nhập lại để tiếp tục.',
+          () => { window.location.href = '/' }
+        )
+      })
+    }
+    window.addEventListener('auth-expired', onExpired)
+    return () => window.removeEventListener('auth-expired', onExpired)
+  }, [])
+}
+
 function App() {
   useSessionRevokedNotice()
+  useAuthExpiredNotice()
   return (
     <Router>
       <ScrollToTop />

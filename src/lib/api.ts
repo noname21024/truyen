@@ -47,10 +47,21 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   response => response,
   error => {
-    if (error?.response?.data?.code === 'session_revoked') {
+    const code = error?.response?.data?.code;
+    const hadToken = !!localStorage.getItem('auth_token');
+    if (code === 'session_revoked') {
       localStorage.removeItem('auth_token');
       localStorage.removeItem('user');
       window.dispatchEvent(new CustomEvent('session-revoked'));
+    } else if (hadToken && code === 'authentication_failed') {
+      // The stored token was rejected as invalid/expired — e.g. it aged past 30
+      // days, or a server-side signing-key rotation invalidated every old token.
+      // Without clearing it here the app keeps looking "logged in" and retries
+      // every authenticated call with a dead token, spamming 403s. Drop it so the
+      // UI falls back to a clean logged-out state.
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('user');
+      window.dispatchEvent(new CustomEvent('auth-expired'));
     }
     return Promise.reject(error);
   }
